@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout code
@@ -31,9 +33,19 @@ jobs:
       - name: Build Debug APK
         run: ./gradlew assembleDebug --no-daemon
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - name: Get version name
+        id: version
+        run: |
+          VERSION=$(grep "versionName" app/build.gradle.kts | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          TIMESTAMP=$(date +'%Y%m%d%H%M')
+          echo "tag=v${VERSION}-${TIMESTAMP}" >> $GITHUB_OUTPUT
+          echo "name=v${VERSION} (${TIMESTAMP})" >> $GITHUB_OUTPUT
+
+      - name: Create Release with APK
+        uses: softprops/action-gh-release@v2
         with:
-          name: app-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 7
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.name }}
+          files: app/build/outputs/apk/debug/app-debug.apk
+          body: "Auto build from commit ${{ github.sha }}"
+          
