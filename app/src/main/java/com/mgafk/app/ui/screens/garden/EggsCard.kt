@@ -143,6 +143,7 @@ fun EggsCard(
     eggs: List<GardenEggSnapshot>,
     apiReady: Boolean = false,
     onHatch: (slot: Int) -> Unit = {},
+    onHatchAll: () -> Unit = {},
     lastHatchedPet: InventoryPetItem? = null,
     lastHatchedEggId: String = "",
     onDismissHatchedPet: () -> Unit = {},
@@ -158,15 +159,38 @@ fun EggsCard(
         }
     }
 
+    val matureCount = eggs.count { now >= it.maturedAt }
+
     AppCard(
         title = "Eggs",
         trailing = {
-            Text(
-                text = "${eggs.size} eggs",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                color = Accent.copy(alpha = 0.7f),
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (matureCount > 0) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xFF8B5CF6).copy(alpha = 0.2f))
+                            .clickable { onHatchAll() }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        Text(
+                            text = "Hatch All ($matureCount)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF8B5CF6),
+                        )
+                    }
+                }
+                Text(
+                    text = "${eggs.size} eggs",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Accent.copy(alpha = 0.7f),
+                )
+            }
         },
         collapsible = true,
         persistKey = "garden.eggs",

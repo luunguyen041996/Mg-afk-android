@@ -606,6 +606,7 @@ private fun SectionContent(
                 eggs = session.gardenEggs,
                 apiReady = state.apiReady,
                 onHatch = { slot -> viewModel.hatchEgg(session.id, slot) },
+                onHatchAll = { viewModel.hatchAllEggs(session.id) },
                 lastHatchedPet = session.lastHatchedPet,
                 lastHatchedEggId = session.lastHatchedEggId,
                 onDismissHatchedPet = { viewModel.clearHatchedPet(session.id) },

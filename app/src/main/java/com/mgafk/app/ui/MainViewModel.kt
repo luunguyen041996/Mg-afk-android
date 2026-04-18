@@ -1130,6 +1130,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Hatch all mature eggs one by one with a small delay between each. */
+    fun hatchAllEggs(sessionId: String) {
+        val session = _state.value.sessions.find { it.id == sessionId } ?: return
+        val matureEggs = session.gardenEggs.filter { egg ->
+            System.currentTimeMillis() >= egg.maturedAt
+        }
+        if (matureEggs.isEmpty()) return
+        viewModelScope.launch {
+            for (egg in matureEggs) {
+                // Check inventory not full — if session no longer has this egg, stop
+                val current = _state.value.sessions.find { it.id == sessionId } ?: break
+                if (current.gardenEggs.none { it.tileId == egg.tileId }) continue
+                hatchEgg(sessionId, egg.tileId)
+                delay(600L)
+            }
+        }
+    }
+
     private val pendingGrowEggJobs = mutableMapOf<String, Job>()
 
     /** Grow an egg on the first available dirt tile with optimistic update. */
