@@ -35,7 +35,7 @@ object VersionFetcher {
     suspend fun fetchLatestRelease(): AppRelease? = withContext(Dispatchers.IO) {
         try {
             val request = Request.Builder()
-                .url("https://api.github.com/repos/Ariedam64/mg-afk-android/releases/latest")
+                .url("https://api.github.com/repos/luunguyen041996/Mg-afk-android/releases/latest")
                 .header("Accept", "application/vnd.github+json")
                 .build()
             val response = client.newCall(request).execute()
@@ -50,7 +50,7 @@ object VersionFetcher {
             }
             val downloadUrl = apkAsset?.jsonObject?.get("browser_download_url")?.jsonPrimitive?.content
                 ?: obj["html_url"]?.jsonPrimitive?.content
-                ?: "https://github.com/Ariedam64/mg-afk-android/releases/latest"
+                ?: "https://github.com/luunguyen041996/Mg-afk-android/releases/latest"
             AppRelease(tagName = tag, downloadUrl = downloadUrl)
         } catch (_: Exception) {
             null

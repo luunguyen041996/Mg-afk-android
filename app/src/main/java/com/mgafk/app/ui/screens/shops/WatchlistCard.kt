@@ -24,6 +24,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -224,9 +226,13 @@ private fun AddWatchlistDialog(
     val tabTypes = listOf("seed", "tool", "egg")
     var selectedTab by remember { mutableStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            focusManager.clearFocus()
+            onDismiss()
+        },
         title = { Text("Add to Watchlist", color = TextPrimary) },
         containerColor = SurfaceDark,
         text = {
@@ -253,6 +259,7 @@ private fun AddWatchlistDialog(
                                 .clickable {
                                     selectedTab = index
                                     searchQuery = ""
+                                    focusManager.clearFocus()
                                 }
                                 .padding(vertical = 8.dp),
                             contentAlignment = Alignment.Center,
@@ -273,6 +280,12 @@ private fun AddWatchlistDialog(
                     onValueChange = { searchQuery = it },
                     placeholder = { Text("Search…", color = TextMuted, fontSize = 13.sp) },
                     singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        imeAction = ImeAction.Done,
+                    ),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                        onDone = { focusManager.clearFocus() },
+                    ),
                     modifier = Modifier.fillMaxWidth(),
                     colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = AccentDim,
@@ -320,7 +333,10 @@ private fun AddWatchlistDialog(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(6.dp))
-                                    .clickable { onAdd(shopType, entry.id) }
+                                    .clickable {
+                                        focusManager.clearFocus()
+                                        onAdd(shopType, entry.id)
+                                    }
                                     .padding(horizontal = 8.dp, vertical = 6.dp),
                             ) {
                                 if (spriteUrl != null) {
@@ -343,7 +359,10 @@ private fun AddWatchlistDialog(
         },
         confirmButton = {},
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = {
+                focusManager.clearFocus()
+                onDismiss()
+            }) {
                 Text("Đóng", color = TextMuted)
             }
         },
