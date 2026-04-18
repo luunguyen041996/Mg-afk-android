@@ -21,10 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -202,132 +199,152 @@ private fun AddWatchlistDialog(
     onAdd: (shopType: String, itemId: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    // Build list of available items not already in watchlist
-    val availableItems = remember(shops, existingWatchlist) {
-        val existing = existingWatchlist.map { it.shopType to it.itemId }.toSet()
-        shops
-            .filter { it.type in WATCHLIST_SHOP_TYPES }
-            .flatMap { shop ->
-                shop.itemNames.mapNotNull { itemId ->
-                    if ((shop.type to itemId) in existing) null
-                    else Triple(shop.type, itemId, MgApi.itemDisplayName(itemId))
-                }
-            }
-            .sortedWith(compareBy({ it.first }, { it.third }))
+    val existing = existingWatchlist.map { it.shopType to it.itemId }.toSet()
+
+    // Lấy toàn bộ items từ MgApi, chia theo nhóm
+    val groupedItems = remember(existingWatchlist) {
+        mapOf(
+            "seed" to MgApi.getPlants().values
+                .filter { (it.id to "seed") !in existing.map { e -> e.second to e.first } }
+                .let { plants ->
+                    MgApi.getPlants().values
+                        .filter { entry -> ("seed" to entry.id) !in existing }
+                        .sortedBy { it.name }
+                },
+            "tool" to MgApi.getItems().values
+                .filter { ("tool" to it.id) !in existing }
+                .sortedBy { it.name },
+            "egg" to MgApi.getEggs().values
+                .filter { ("egg" to it.id) !in existing }
+                .sortedBy { it.name },
+        )
     }
 
-    var selectedShopType by remember { mutableStateOf<String?>(null) }
-    var selectedItemId by remember { mutableStateOf<String?>(null) }
-    var shopDropdownExpanded by remember { mutableStateOf(false) }
-    var itemDropdownExpanded by remember { mutableStateOf(false) }
-
-    val shopTypes = availableItems.map { it.first }.distinct()
-    val itemsForType = availableItems.filter { it.first == selectedShopType }
+    val tabLabels = listOf("Seed", "Tool", "Egg")
+    val tabTypes = listOf("seed", "tool", "egg")
+    var selectedTab by remember { mutableStateOf(0) }
+    var searchQuery by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add to Watchlist", color = TextPrimary) },
         containerColor = SurfaceDark,
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "Select an item to auto-buy when the shop restocks.",
+                    "Chọn item để tự động mua khi shop restock.",
                     color = TextMuted,
                     fontSize = 13.sp,
                 )
 
-                // Shop type picker
-                Text("Shop type", color = TextMuted, fontSize = 12.sp)
-                Box {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .border(1.dp, SurfaceBorder, RoundedCornerShape(8.dp))
-                            .clickable { shopDropdownExpanded = true }
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(
-                            text = selectedShopType?.replaceFirstChar { it.uppercase() } ?: "Select shop…",
-                            color = if (selectedShopType != null) TextPrimary else TextMuted,
-                            fontSize = 14.sp,
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = shopDropdownExpanded,
-                        onDismissRequest = { shopDropdownExpanded = false },
-                    ) {
-                        shopTypes.forEach { type ->
-                            DropdownMenuItem(
-                                text = { Text(type.replaceFirstChar { it.uppercase() }) },
-                                onClick = {
-                                    selectedShopType = type
-                                    selectedItemId = null
-                                    shopDropdownExpanded = false
-                                },
+                // Tab bar
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, SurfaceBorder, RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(8.dp)),
+                ) {
+                    tabLabels.forEachIndexed { index, label ->
+                        val selected = selectedTab == index
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .background(if (selected) AccentDim else SurfaceDark)
+                                .clickable {
+                                    selectedTab = index
+                                    searchQuery = ""
+                                }
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = label,
+                                color = if (selected) TextPrimary else TextMuted,
+                                fontSize = 13.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                             )
                         }
                     }
                 }
 
-                // Item picker
-                if (selectedShopType != null) {
-                    Text("Item", color = TextMuted, fontSize = 12.sp)
-                    Box {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .border(1.dp, SurfaceBorder, RoundedCornerShape(8.dp))
-                                .clickable { itemDropdownExpanded = true }
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
+                // Search box
+                androidx.compose.material3.OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search…", color = TextMuted, fontSize = 13.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AccentDim,
+                        unfocusedBorderColor = SurfaceBorder,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                    ),
+                )
+
+                // Item list
+                val shopType = tabTypes[selectedTab]
+                val items = groupedItems[shopType]
+                    ?.filter { searchQuery.isBlank() || it.name.contains(searchQuery, ignoreCase = true) }
+                    ?: emptyList()
+
+                androidx.compose.foundation.lazy.LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(220.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    if (items.isEmpty()) {
+                        item {
                             Text(
-                                text = selectedItemId?.let { MgApi.itemDisplayName(it) } ?: "Select item…",
-                                color = if (selectedItemId != null) TextPrimary else TextMuted,
-                                fontSize = 14.sp,
+                                "Không có item nào",
+                                color = TextMuted,
+                                fontSize = 13.sp,
+                                modifier = Modifier.padding(8.dp),
                             )
                         }
-                        DropdownMenu(
-                            expanded = itemDropdownExpanded,
-                            onDismissRequest = { itemDropdownExpanded = false },
-                        ) {
-                            if (itemsForType.isEmpty()) {
-                                DropdownMenuItem(
-                                    text = { Text("No items available", color = TextMuted) },
-                                    onClick = { itemDropdownExpanded = false },
-                                )
-                            } else {
-                                itemsForType.forEach { (_, itemId, displayName) ->
-                                    DropdownMenuItem(
-                                        text = { Text(displayName) },
-                                        onClick = {
-                                            selectedItemId = itemId
-                                            itemDropdownExpanded = false
-                                        },
+                    } else {
+                        items(items.size) { index ->
+                            val entry = items[index]
+                            val spriteCategory = when (shopType) {
+                                "seed" -> "plants"
+                                "tool" -> "items"
+                                "egg" -> "eggs"
+                                else -> "items"
+                            }
+                            val spriteUrl = entry.sprite?.let {
+                                MgApi.spriteUrl(spriteCategory, it.removeSuffix(".png"))
+                            }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { onAdd(shopType, entry.id) }
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                            ) {
+                                if (spriteUrl != null) {
+                                    SpriteImage(
+                                        url = spriteUrl,
+                                        modifier = Modifier.size(22.dp),
                                     )
+                                    Spacer(modifier = Modifier.width(8.dp))
                                 }
+                                Text(
+                                    text = entry.name,
+                                    color = TextPrimary,
+                                    fontSize = 14.sp,
+                                )
                             }
                         }
                     }
                 }
             }
         },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    val type = selectedShopType
-                    val item = selectedItemId
-                    if (type != null && item != null) onAdd(type, item)
-                },
-                enabled = selectedShopType != null && selectedItemId != null,
-            ) {
-                Text("Add", color = if (selectedShopType != null && selectedItemId != null) Accent else TextMuted)
-            }
-        },
+        confirmButton = {},
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = TextMuted)
+                Text("Đóng", color = TextMuted)
             }
         },
     )
