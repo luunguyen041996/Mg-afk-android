@@ -1148,6 +1148,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Grow all eggs in inventory one by one until no free tiles left. */
+    fun growAllEggs(sessionId: String) {
+        val client = clients[sessionId] ?: return
+        viewModelScope.launch {
+            val session = _state.value.sessions.find { it.id == sessionId } ?: return@launch
+            // Build list: each egg repeated by quantity
+            val eggsToGrow = session.inventory.eggs.flatMap { egg ->
+                List(egg.quantity) { egg.eggId }
+            }
+            for (eggId in eggsToGrow) {
+                val current = _state.value.sessions.find { it.id == sessionId } ?: break
+                if (current.freePlantTiles <= 0) break
+                if (current.inventory.eggs.none { it.eggId == eggId && it.quantity > 0 }) continue
+                growEgg(sessionId, eggId)
+                delay(600L)
+            }
+        }
+    }
+
     private val pendingGrowEggJobs = mutableMapOf<String, Job>()
 
     /** Grow an egg on the first available dirt tile with optimistic update. */
