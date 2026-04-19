@@ -38,6 +38,9 @@ data class AppSettings(
     // Shops
     val purchaseMode: PurchaseMode = PurchaseMode.HYBRID,
 
+    // Weather
+    val disconnectOnBadWeather: Boolean = false,
+
     // Developer
     val showDebugMenu: Boolean = false,
 )
