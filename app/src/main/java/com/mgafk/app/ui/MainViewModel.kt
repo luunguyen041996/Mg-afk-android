@@ -1148,19 +1148,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Grow all eggs in inventory one by one until no free tiles left. */
-    fun growAllEggs(sessionId: String) {
-        val client = clients[sessionId] ?: return
+    /** Grow all eggs of a specific type until no free tiles left. */
+    fun growAllEggs(sessionId: String, eggId: String) {
         viewModelScope.launch {
             val session = _state.value.sessions.find { it.id == sessionId } ?: return@launch
-            // Build list: each egg repeated by quantity
-            val eggsToGrow = session.inventory.eggs.flatMap { egg ->
-                List(egg.quantity) { egg.eggId }
-            }
-            for (eggId in eggsToGrow) {
-                val current = _state.value.sessions.find { it.id == sessionId } ?: break
-                if (current.freePlantTiles <= 0) break
-                if (current.inventory.eggs.none { it.eggId == eggId && it.quantity > 0 }) continue
+            val quantity = session.inventory.eggs.find { it.eggId == eggId }?.quantity ?: 0
+            repeat(quantity) {
+                val current = _state.value.sessions.find { it.id == sessionId } ?: return@launch
+                if (current.freePlantTiles <= 0) return@launch
+                if (current.inventory.eggs.none { it.eggId == eggId && it.quantity > 0 }) return@launch
                 growEgg(sessionId, eggId)
                 delay(600L)
             }

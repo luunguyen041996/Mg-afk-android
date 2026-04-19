@@ -158,7 +158,7 @@ fun InventoryCard(
     favoritedItemIds: Set<String> = emptySet(),
     onPlantSeed: (species: String) -> Unit = {},
     onGrowEgg: (eggId: String) -> Unit = {},
-    onGrowAllEggs: () -> Unit = {},
+    onGrowAllEggs: (eggId: String) -> Unit = {},
     onPlantGardenPlant: (itemId: String) -> Unit = {},
     onToggleLock: (itemId: String) -> Unit = {},
     onSellPet: (itemId: String) -> Unit = {},
@@ -337,7 +337,7 @@ fun InventoryCard(
                 freePlantTiles = freePlantTiles,
                 isLocked = eggId in favoritedItemIds,
                 onGrowEgg = { onGrowEgg(eggId) },
-                onGrowAll = { onGrowAllEggs() },
+                onGrowAll = { onGrowAllEggs(eggId) },
                 onToggleLock = { onToggleLock(eggId) },
                 onDismiss = { selectedEggId = null },
             )
