@@ -158,6 +158,7 @@ fun InventoryCard(
     favoritedItemIds: Set<String> = emptySet(),
     onPlantSeed: (species: String) -> Unit = {},
     onGrowEgg: (eggId: String) -> Unit = {},
+    onGrowAllEggs: () -> Unit = {},
     onPlantGardenPlant: (itemId: String) -> Unit = {},
     onToggleLock: (itemId: String) -> Unit = {},
     onSellPet: (itemId: String) -> Unit = {},
@@ -213,6 +214,21 @@ fun InventoryCard(
                     }
                 }
                 if (sortedEggs.isNotEmpty()) SubSection("Eggs", sortedEggs.size) {
+                    // Grow All button
+                    if (freePlantTiles > 0 && apiReady) {
+                        val totalEggs = sortedEggs.sumOf { it.quantity }
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = onGrowAllEggs,
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.5f)),
+                        ) {
+                            Text(
+                                "Grow All ($totalEggs eggs, $freePlantTiles free tiles)",
+                                fontSize = 12.sp,
+                                color = Color(0xFF8B5CF6),
+                            )
+                        }
+                    }
                     GridOf(sortedEggs.size) { i ->
                         Box(modifier = Modifier.clickable { selectedEggId = sortedEggs[i].eggId }) {
                             LockOverlay(isLocked = sortedEggs[i].eggId in favoritedItemIds) {

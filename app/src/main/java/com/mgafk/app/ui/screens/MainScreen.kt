@@ -684,6 +684,7 @@ private fun SectionContent(
                 favoritedItemIds = session.favoritedItemIds,
                 onPlantSeed = { species -> viewModel.plantSeed(session.id, species) },
                 onGrowEgg = { eggId -> viewModel.growEgg(session.id, eggId) },
+                onGrowAllEggs = { viewModel.growAllEggs(session.id) },
                 onPlantGardenPlant = { itemId -> viewModel.plantGardenPlant(session.id, itemId) },
                 onToggleLock = { itemId -> viewModel.toggleLockItem(session.id, itemId) },
                 onSellPet = { itemId -> viewModel.sellPet(session.id, itemId) },
