@@ -214,21 +214,6 @@ fun InventoryCard(
                     }
                 }
                 if (sortedEggs.isNotEmpty()) SubSection("Eggs", sortedEggs.size) {
-                    // Grow All button
-                    if (freePlantTiles > 0 && apiReady) {
-                        val totalEggs = sortedEggs.sumOf { it.quantity }
-                        androidx.compose.material3.OutlinedButton(
-                            onClick = onGrowAllEggs,
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.5f)),
-                        ) {
-                            Text(
-                                "Grow All ($totalEggs eggs, $freePlantTiles free tiles)",
-                                fontSize = 12.sp,
-                                color = Color(0xFF8B5CF6),
-                            )
-                        }
-                    }
                     GridOf(sortedEggs.size) { i ->
                         Box(modifier = Modifier.clickable { selectedEggId = sortedEggs[i].eggId }) {
                             LockOverlay(isLocked = sortedEggs[i].eggId in favoritedItemIds) {
@@ -352,6 +337,7 @@ fun InventoryCard(
                 freePlantTiles = freePlantTiles,
                 isLocked = eggId in favoritedItemIds,
                 onGrowEgg = { onGrowEgg(eggId) },
+                onGrowAll = { onGrowAllEggs() },
                 onToggleLock = { onToggleLock(eggId) },
                 onDismiss = { selectedEggId = null },
             )
@@ -1072,6 +1058,7 @@ private fun EggGrowDialog(
     freePlantTiles: Int,
     isLocked: Boolean,
     onGrowEgg: () -> Unit,
+    onGrowAll: () -> Unit,
     onToggleLock: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1147,6 +1134,24 @@ private fun EggGrowDialog(
                     fontWeight = FontWeight.Bold,
                     color = if (canGrow) Color.White else Color.White.copy(alpha = 0.4f),
                 )
+            }
+
+            if (canGrow && egg.quantity > 1) {
+                Spacer(modifier = Modifier.height(8.dp))
+                val growCount = minOf(egg.quantity, freePlantTiles)
+                androidx.compose.material3.OutlinedButton(
+                    onClick = { onGrowAll(); onDismiss() },
+                    modifier = Modifier.fillMaxWidth(),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(10.dp),
+                ) {
+                    Text(
+                        "Grow All ($growCount)",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF8B5CF6),
+                    )
+                }
             }
 
         }
