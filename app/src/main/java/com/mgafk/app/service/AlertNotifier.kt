@@ -174,6 +174,26 @@ class AlertNotifier(private val context: Context) {
         manager.notify(DISCONNECT_NOTIFICATION_ID + sessionName.hashCode(), builder.build())
     }
 
+    fun notifyWeatherDisconnect(sessionName: String, weather: String) {
+        val builder = NotificationCompat.Builder(context, MgAfkApp.CHANNEL_ALERTS)
+            .setContentTitle("$sessionName — Auto Disconnected")
+            .setContentText("Bad weather: $weather. Will reconnect when weather clears.")
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setAutoCancel(true)
+            .setContentIntent(mainActivityIntent())
+        manager.notify(DISCONNECT_NOTIFICATION_ID + sessionName.hashCode() + 999, builder.build())
+    }
+
+    fun notifyWeatherReconnect(sessionName: String, weather: String) {
+        val builder = NotificationCompat.Builder(context, MgAfkApp.CHANNEL_ALERTS)
+            .setContentTitle("$sessionName — Reconnected")
+            .setContentText("Weather cleared: $weather. Session reconnected automatically.")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setAutoCancel(true)
+            .setContentIntent(mainActivityIntent())
+        manager.notify(DISCONNECT_NOTIFICATION_ID + sessionName.hashCode() + 998, builder.build())
+    }
+
     fun cancelDisconnectNotification(sessionName: String) {
         manager.cancel(DISCONNECT_NOTIFICATION_ID + sessionName.hashCode())
     }

@@ -113,6 +113,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val clients = mutableMapOf<String, RoomClient>()
     private val collectorJobs = mutableMapOf<String, Job>()
     private val watchlistManagers = mutableMapOf<String, WatchlistManager>()
+    // Sessions đang chờ reconnect vì weather xấu (sessionId -> Job)
+    private val weatherReconnectJobs = mutableMapOf<String, Job>()
     private var serviceRunning = false
     private val connectivityManager =
         application.getSystemService(ConnectivityManager::class.java)
@@ -228,6 +230,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val client = clients.remove(id)
         client?.dispose()
         watchlistManagers.remove(id)?.reset()
+        weatherReconnectJobs.remove(id)?.cancel()
         _state.update { s ->
             val filtered = s.sessions.filter { it.id != id }
             val sessions = filtered.ifEmpty { listOf(Session()) }
@@ -1149,6 +1152,57 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Grow all eggs of a specific type until no free tiles left. */
+    /**
+     * Poll weather qua REST API mỗi 60 giây.
+     * Endpoint: https://mg-api.ariedam.fr/live/weather
+     * Khi weather tốt → tự động connect lại.
+     */
+    private suspend fun startWeatherReconnectPolling(sessionId: String, badWeathers: Set<String>) {
+        AppLog.d(TAG, "[$sessionId] Starting weather poll via mg-api.ariedam.fr every 60s...")
+        val sessionName = _state.value.sessions.find { it.id == sessionId }?.name ?: sessionId
+        val client = okhttp3.OkHttpClient()
+
+        while (weatherReconnectJobs.containsKey(sessionId)) {
+            delay(60_000L)
+
+            // Dừng nếu session không còn hoặc user đã tự connect
+            val currentSession = _state.value.sessions.find { it.id == sessionId } ?: break
+            if (currentSession.connected) {
+                weatherReconnectJobs.remove(sessionId)
+                break
+            }
+
+            try {
+                val request = okhttp3.Request.Builder()
+                    .url("https://mg-api.ariedam.fr/live/weather")
+                    .header("Accept", "application/json")
+                    .build()
+                val response = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    client.newCall(request).execute()
+                }
+                val body = response.body?.string() ?: continue
+                val json = kotlinx.serialization.json.Json.parseToJsonElement(body)
+                    .jsonObject
+                val weatherRaw = json["weather"]?.jsonPrimitive?.content ?: continue
+                val weatherKey = weatherRaw.trim().lowercase()
+
+                AppLog.d(TAG, "[$sessionId] Weather poll result: $weatherRaw")
+
+                if (weatherKey !in badWeathers) {
+                    AppLog.d(TAG, "[$sessionId] Weather cleared ($weatherRaw) — reconnecting!")
+                    weatherReconnectJobs.remove(sessionId)
+                    connect(sessionId)
+                    alertNotifier.notifyWeatherReconnect(sessionName, weatherRaw)
+                    break
+                } else {
+                    AppLog.d(TAG, "[$sessionId] Weather still bad ($weatherRaw) — retry in 60s")
+                }
+            } catch (e: Exception) {
+                AppLog.e(TAG, "[$sessionId] Weather poll error: ${e.message}")
+            }
+        }
+    }
+
     fun growAllEggs(sessionId: String, eggId: String) {
         viewModelScope.launch {
             val session = _state.value.sessions.find { it.id == sessionId } ?: return@launch
@@ -1632,6 +1686,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val alerts = _state.value.alerts
                 alertNotifier.checkWeather(event.weather, previousWeather, alerts)
                 alertNotifier.checkPetHunger(newPets, alerts)
+
+                // Auto-disconnect on bad weather (Dawn or Thunderstorm)
+                val badWeathers = setOf("dawn", "thunder", "thunderstorm")
+                val newWeatherKey = event.weather.trim().lowercase()
+                val prevWeatherKey = previousWeather.trim().lowercase()
+                if (_state.value.settings.disconnectOnBadWeather
+                    && newWeatherKey in badWeathers
+                    && prevWeatherKey !in badWeathers
+                ) {
+                    AppLog.d(TAG, "[$sessionId] Bad weather '$newWeatherKey' — auto-disconnecting")
+                    disconnect(sessionId)
+                    alertNotifier.notifyWeatherDisconnect(
+                        sessionName = _state.value.sessions.find { it.id == sessionId }?.name ?: sessionId,
+                        weather = event.weather,
+                    )
+                    // Start polling to reconnect when weather clears
+                    weatherReconnectJobs[sessionId]?.cancel()
+                    weatherReconnectJobs[sessionId] = viewModelScope.launch {
+                        startWeatherReconnectPolling(sessionId, badWeathers)
+                    }
+                }
+                // Weather cleared while waiting → cancel polling (handled inside polling job)
+                if (newWeatherKey !in badWeathers && weatherReconnectJobs.containsKey(sessionId)) {
+                    weatherReconnectJobs.remove(sessionId)?.cancel()
+                }
             }
             is ClientEvent.GardenChanged -> {
                 val newGarden = mutableListOf<GardenPlantSnapshot>()

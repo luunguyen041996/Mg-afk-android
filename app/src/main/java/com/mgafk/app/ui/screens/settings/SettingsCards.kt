@@ -426,6 +426,15 @@ private fun ReconnectionCard(settings: AppSettings, onUpdate: (AppSettings) -> U
 
         Spacer(modifier = Modifier.height(12.dp))
 
+        ToggleRow(
+            title = "Auto-disconnect on bad weather",
+            description = "Automatically disconnect when weather changes to Dawn or Thunderstorm.",
+            checked = settings.disconnectOnBadWeather,
+            onCheckedChange = { onUpdate(settings.copy(disconnectOnBadWeather = it)) },
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
         SettingRow(
             label = "Kicked by another session",
             description = "Wait time before reconnecting when the same account connects from another device.",
