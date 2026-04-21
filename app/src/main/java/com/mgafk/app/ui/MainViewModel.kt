@@ -1157,15 +1157,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Endpoint: https://mg-api.ariedam.fr/live/weather
      * Khi weather tốt → tự động connect lại.
      */
+    /**
+     * Lắng nghe weather qua SSE stream từ mg-api.ariedam.fr/live/weather/stream
+     * Khi nhận event weather tốt → tự động reconnect.
+     */
     private suspend fun startWeatherReconnectPolling(sessionId: String, badWeathers: Set<String>) {
-        AppLog.d(TAG, "[$sessionId] Starting weather poll via mg-api.ariedam.fr every 60s...")
+        AppLog.d(TAG, "[$sessionId] Starting weather SSE stream...")
         val sessionName = _state.value.sessions.find { it.id == sessionId }?.name ?: sessionId
-        val client = okhttp3.OkHttpClient()
+        val httpClient = okhttp3.OkHttpClient.Builder()
+            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(0, java.util.concurrent.TimeUnit.SECONDS) // SSE cần timeout = 0
+            .build()
 
         while (weatherReconnectJobs.containsKey(sessionId)) {
-            delay(60_000L)
-
-            // Dừng nếu session không còn hoặc user đã tự connect
+            // Dừng nếu user đã tự connect thủ công
             val currentSession = _state.value.sessions.find { it.id == sessionId } ?: break
             if (currentSession.connected) {
                 weatherReconnectJobs.remove(sessionId)
@@ -1173,32 +1178,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             try {
+                AppLog.d(TAG, "[$sessionId] Connecting to SSE weather stream...")
                 val request = okhttp3.Request.Builder()
-                    .url("https://mg-api.ariedam.fr/live/weather")
-                    .header("Accept", "application/json")
+                    .url("https://mg-api.ariedam.fr/live/weather/stream")
+                    .header("Accept", "text/event-stream")
+                    .header("Cache-Control", "no-cache")
                     .build()
-                val response = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    client.newCall(request).execute()
-                }
-                val body = response.body?.string() ?: continue
-                val json = kotlinx.serialization.json.Json.parseToJsonElement(body)
-                    .jsonObject
-                val weatherRaw = json["weather"]?.jsonPrimitive?.content ?: continue
-                val weatherKey = weatherRaw.trim().lowercase()
 
-                AppLog.d(TAG, "[$sessionId] Weather poll result: $weatherRaw")
+                withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    httpClient.newCall(request).execute().use { response ->
+                        val source = response.body?.source() ?: return@use
+                        while (weatherReconnectJobs.containsKey(sessionId)) {
+                            val line = source.readUtf8Line() ?: break
+                            AppLog.d(TAG, "[$sessionId] SSE line: $line")
 
-                if (weatherKey !in badWeathers) {
-                    AppLog.d(TAG, "[$sessionId] Weather cleared ($weatherRaw) — reconnecting!")
-                    weatherReconnectJobs.remove(sessionId)
-                    connect(sessionId)
-                    alertNotifier.notifyWeatherReconnect(sessionName, weatherRaw)
-                    break
-                } else {
-                    AppLog.d(TAG, "[$sessionId] Weather still bad ($weatherRaw) — retry in 60s")
+                            // SSE format: "data: {...}"
+                            if (!line.startsWith("data:")) continue
+                            val data = line.removePrefix("data:").trim()
+                            if (data.isEmpty()) continue
+
+                            try {
+                                val json = kotlinx.serialization.json.Json
+                                    .parseToJsonElement(data).jsonObject
+                                // Thử các field có thể có
+                                val weatherRaw = (
+                                    json["weather"]?.jsonPrimitive?.content
+                                    ?: json["name"]?.jsonPrimitive?.content
+                                    ?: json["type"]?.jsonPrimitive?.content
+                                ) ?: continue
+
+                                val weatherKey = weatherRaw.trim().lowercase()
+                                AppLog.d(TAG, "[$sessionId] SSE weather: '$weatherKey'")
+
+                                if (weatherKey !in badWeathers) {
+                                    AppLog.d(TAG, "[$sessionId] Weather cleared! Reconnecting...")
+                                    weatherReconnectJobs.remove(sessionId)
+                                    viewModelScope.launch {
+                                        connect(sessionId)
+                                        alertNotifier.notifyWeatherReconnect(sessionName, weatherRaw)
+                                    }
+                                    return@use
+                                }
+                            } catch (e: Exception) {
+                                AppLog.e(TAG, "[$sessionId] SSE parse error: ${e.message}, data: $data")
+                            }
+                        }
+                    }
                 }
             } catch (e: Exception) {
-                AppLog.e(TAG, "[$sessionId] Weather poll error: ${e.message}")
+                AppLog.e(TAG, "[$sessionId] SSE error: ${e.message} — retry in 30s")
+                delay(30_000L) // Retry sau 30 giây nếu SSE bị ngắt
             }
         }
     }
@@ -1687,8 +1716,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 alertNotifier.checkWeather(event.weather, previousWeather, alerts)
                 alertNotifier.checkPetHunger(newPets, alerts)
 
-                // Auto-disconnect on bad weather (Dawn or Thunderstorm)
-                val badWeathers = setOf("dawn", "thunder", "thunderstorm")
+                // Auto-disconnect on bad weather (Dawn, Amber Moon, Thunderstorm)
+                val badWeathers = setOf("dawn", "amber moon", "thunderstorm", "thunder", "storm")
                 val newWeatherKey = event.weather.trim().lowercase()
                 val prevWeatherKey = previousWeather.trim().lowercase()
                 if (_state.value.settings.disconnectOnBadWeather
