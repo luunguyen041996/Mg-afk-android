@@ -32,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -1203,8 +1204,8 @@ private fun EggGrowDialog(
             }
 
             if (canGrow && egg.quantity > 1) {
-                Spacer(modifier = Modifier.height(8.dp))
                 val growCount = minOf(egg.quantity, freePlantTiles)
+                Spacer(modifier = Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = onGrowAll,
                     modifier = Modifier.fillMaxWidth(),
