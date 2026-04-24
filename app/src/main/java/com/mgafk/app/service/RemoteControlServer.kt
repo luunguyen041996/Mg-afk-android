@@ -197,7 +197,7 @@ class RemoteControlServer(
     }
 
     fun stop() {
-        server?.stop(500, 1000)
+        server?.stop(500L, 1000L, java.util.concurrent.TimeUnit.MILLISECONDS)
         server = null
         scope.cancel()
         AppLog.d(TAG, "Remote control server stopped")
