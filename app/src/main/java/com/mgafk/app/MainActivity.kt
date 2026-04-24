@@ -16,11 +16,13 @@ import com.mgafk.app.play.PlayActivity
 import com.mgafk.app.ui.CasinoViewModel
 import com.mgafk.app.ui.MainViewModel
 import com.mgafk.app.ui.screens.MainScreen
+import com.mgafk.app.service.RemoteControlServer
 import com.mgafk.app.ui.theme.MgAfkTheme
 
 class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
+    private lateinit var remoteServer: RemoteControlServer
     private val casinoViewModel: CasinoViewModel by viewModels()
     private var pendingOAuthSessionId: String? = null
     private var pendingCasinoOAuthSessionId: String? = null
@@ -66,6 +68,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestNotificationPermission()
+        remoteServer = RemoteControlServer(this, viewModel)
+        remoteServer.start()
         setContent {
             MgAfkTheme {
                 MainScreen(
@@ -98,6 +102,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onDestroy() {
+        if (::remoteServer.isInitialized) remoteServer.stop()
+        super.onDestroy()
     }
 
     private fun requestNotificationPermission() {
