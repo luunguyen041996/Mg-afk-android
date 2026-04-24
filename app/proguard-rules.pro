@@ -10,3 +10,13 @@
 -keep,includedescriptorclasses class com.mgafk.app.**$$serializer { *; }
 -keepclassmembers class com.mgafk.app.** { *** Companion; }
 -keepclasseswithmembers class com.mgafk.app.** { kotlinx.serialization.KSerializer serializer(...); }
+
+# Ktor / Netty
+-dontwarn io.netty.**
+-dontwarn org.apache.log4j.**
+-dontwarn org.apache.logging.**
+-dontwarn org.eclipse.jetty.**
+-dontwarn org.slf4j.**
+-dontwarn reactor.**
+-keep class io.netty.** { *; }
+-keep class io.ktor.** { *; }
