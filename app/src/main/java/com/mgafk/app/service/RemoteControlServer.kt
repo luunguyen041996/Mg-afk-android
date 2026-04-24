@@ -13,6 +13,7 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
+import kotlin.time.Duration.Companion.seconds
 import io.ktor.websocket.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,7 +27,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import java.net.NetworkInterface
-import java.time.Duration
+
 import java.util.Collections
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -61,8 +62,8 @@ class RemoteControlServer(
 
         server = embeddedServer(Netty, port = PORT, host = "0.0.0.0") {
             install(WebSockets) {
-                pingPeriod = Duration.ofSeconds(30)
-                timeout = Duration.ofSeconds(60)
+                pingPeriod = 30.seconds
+                timeout = 60.seconds
                 maxFrameSize = Long.MAX_VALUE
                 masking = false
             }
