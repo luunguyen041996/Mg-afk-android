@@ -349,9 +349,9 @@ class RemoteControlServer(
                         putJsonArray("logs") {
                             session.logs.takeLast(50).forEach { log ->
                                 add(buildJsonArray {
-                                    add(log.timestamp / 1000.0)
-                                    add("ABILITY")
-                                    add(log.action)
+                                    add(JsonPrimitive(log.timestamp / 1000.0))
+                                    add(JsonPrimitive("ABILITY"))
+                                    add(JsonPrimitive(log.action))
                                 })
                             }
                         }
@@ -372,8 +372,8 @@ class RemoteControlServer(
             put("mutations", buildJsonArray { pet.mutations.forEach { add(it) } })
             put("abilities", buildJsonArray { pet.abilities.forEach { add(it) } })
             put("rarity", "")
-            put("strength", null as String?)
-            put("maxStrength", null as String?)
+            put("strength", JsonPrimitive(null as String?))
+            put("maxStrength", JsonPrimitive(null as String?))
         }
     }
 
