@@ -364,10 +364,21 @@ class RemoteControlServer(
     // ── Model converters ─────────────────────────────────────────────────────
 
     private fun petToJson(pet: com.mgafk.app.data.model.PetSnapshot): kotlinx.serialization.json.JsonElement {
+        val maxHunger = mapOf(
+            "worm" to 500, "snail" to 1000, "bee" to 1500, "chicken" to 3000,
+            "bunny" to 750, "dragonfly" to 250, "pig" to 50000, "cow" to 25000,
+            "turkey" to 500, "squirrel" to 15000, "turtle" to 100000, "goat" to 20000,
+            "snowfox" to 14000, "stoat" to 10000, "whitecaribou" to 30000,
+            "caribou" to 30000, "pony" to 4000, "horse" to 4000,
+            "firehorse" to 200000, "butterfly" to 25000, "capybara" to 150000,
+            "peacock" to 100000,
+        )
+        val max = maxHunger[pet.species.lowercase()] ?: 1000
+        val hungerPct = if (max > 0) (pet.hunger / max).coerceIn(0.0, 1.0) else 0.0
         return buildJsonObject {
             put("name", pet.name)
             put("species", pet.species)
-            put("hunger", pet.hunger)
+            put("hunger", hungerPct)
             put("xp", pet.xp)
             put("mutations", buildJsonArray { pet.mutations.forEach { add(JsonPrimitive(it)) } })
             put("abilities", buildJsonArray { pet.abilities.forEach { add(JsonPrimitive(it)) } })
