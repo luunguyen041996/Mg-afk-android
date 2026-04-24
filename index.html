@@ -1,422 +1,3 @@
-package com.mgafk.app.service
-
-import android.content.Context
-import com.mgafk.app.data.AppLog
-import com.mgafk.app.data.model.SessionStatus
-import com.mgafk.app.data.model.WatchlistItem
-import com.mgafk.app.ui.MainViewModel
-import com.mgafk.app.ui.UiState
-import io.ktor.http.*
-import io.ktor.server.application.*
-import io.ktor.server.engine.*
-import io.ktor.server.netty.*
-import io.ktor.server.request.*
-import io.ktor.server.response.*
-import io.ktor.server.routing.*
-import io.ktor.server.websocket.*
-import io.ktor.websocket.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonArray
-import kotlinx.serialization.json.putJsonObject
-import java.net.NetworkInterface
-import java.util.Collections
-import java.util.concurrent.CopyOnWriteArrayList
-
-/**
- * HTTP + WebSocket server tương thích với Python dashboard.
- * Dùng cùng protocol: snapshot + update events, nhận lệnh 2 chiều.
- *
- * Routes:
- *   GET  /          → index.html (Python dashboard)
- *   GET  /ws        → WebSocket (Python dashboard protocol)
- *   GET  /api/status → JSON đơn giản
- */
-class RemoteControlServer(
-    private val context: Context,
-    private val viewModel: MainViewModel,
-) {
-    private val TAG = "RemoteControlServer"
-    private val PORT = 8080
-
-    private var server: ApplicationEngine? = null
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val wsClients = CopyOnWriteArrayList<DefaultWebSocketSession>()
-
-    fun start() {
-        if (server != null) return
-        AppLog.d(TAG, "Starting remote control server on port $PORT")
-
-        server = embeddedServer(Netty, port = PORT, host = "0.0.0.0") {
-            install(WebSockets) {
-            }
-            routing {
-                // ── Dashboard HTML ──
-                get("/") { call.respondText(DASHBOARD_HTML, ContentType.Text.Html) }
-
-                // ── Simple status API ──
-                get("/api/status") {
-                    val state = viewModel.state.value
-                    val session = state.activeSession
-                    call.respondText(
-                        buildJsonObject {
-                            put("connected", session.status.name)
-                            put("sessionName", session.name)
-                            put("weather", session.weather)
-                        }.toString(),
-                        ContentType.Application.Json
-                    )
-                }
-
-                // ── WebSocket — Python dashboard protocol ──
-                webSocket("/ws") {
-                    wsClients.add(this)
-                    AppLog.d(TAG, "WS client connected (total=${wsClients.size})")
-                    try {
-                        // Gửi snapshot ngay khi kết nối
-                        send(Frame.Text(buildSnapshot(viewModel.state.value)))
-
-                        // Nhận lệnh từ browser
-                        for (frame in incoming) {
-                            if (frame is Frame.Text) {
-                                handleCommand(frame.readText())
-                            }
-                        }
-                    } finally {
-                        wsClients.remove(this)
-                        AppLog.d(TAG, "WS client disconnected (total=${wsClients.size})")
-                    }
-                }
-            }
-        }.start(wait = false)
-
-        // Broadcast state khi có thay đổi
-        scope.launch {
-            viewModel.state.collectLatest { state ->
-                broadcastUpdate(state)
-            }
-        }
-
-        AppLog.d(TAG, "Remote server started at http://${getLocalIp()}:$PORT")
-    }
-
-    fun stop() {
-        server?.stop(500L, 1000L, java.util.concurrent.TimeUnit.MILLISECONDS)
-        server = null
-        scope.cancel()
-        AppLog.d(TAG, "Remote control server stopped")
-    }
-
-    fun getLocalIp(): String {
-        return try {
-            val interfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
-            for (iface in interfaces) {
-                val addrs = Collections.list(iface.inetAddresses)
-                for (addr in addrs) {
-                    if (!addr.isLoopbackAddress && addr is java.net.Inet4Address) {
-                        return addr.hostAddress ?: continue
-                    }
-                }
-            }
-            "unknown"
-        } catch (e: Exception) { "unknown" }
-    }
-
-    // ── Command handler ──────────────────────────────────────────────────────
-
-    private suspend fun handleCommand(raw: String) {
-        val obj = runCatching {
-            Json.parseToJsonElement(raw) as? JsonObject
-        }.getOrNull() ?: return
-
-        val cmd = (obj["cmd"] as? JsonPrimitive)?.content ?: return
-        val sessionId = (obj["sessionId"] as? JsonPrimitive)?.content ?: ""
-
-        AppLog.d(TAG, "WS cmd: $cmd sessionId=$sessionId")
-
-        when (cmd) {
-            "connectSession" -> {
-                val targetId = sessionId.ifBlank {
-                    viewModel.state.value.activeSessionId
-                }
-                viewModel.connect(targetId)
-            }
-
-            "disconnectSession" -> {
-                val targetId = sessionId.ifBlank {
-                    viewModel.state.value.activeSessionId
-                }
-                viewModel.disconnect(targetId)
-            }
-
-            "setWatchlist" -> {
-                // items: [{shopType, itemId}, ...]
-                val itemsArr = obj["items"]
-                if (itemsArr != null) {
-                    val newItems = mutableListOf<WatchlistItem>()
-                    (itemsArr as? kotlinx.serialization.json.JsonArray)?.forEach { el ->
-                        val item = el as? JsonObject ?: return@forEach
-                        val shopType = (item["shopType"] as? JsonPrimitive)?.content ?: return@forEach
-                        val itemId = (item["itemId"] as? JsonPrimitive)?.content ?: return@forEach
-                        newItems.add(WatchlistItem(shopType = shopType, itemId = itemId))
-                    }
-                    // Sync: xoá hết rồi thêm lại
-                    val current = viewModel.state.value.watchlist.toList()
-                    current.forEach { viewModel.removeWatchlistItem(it.shopType, it.itemId) }
-                    newItems.forEach { viewModel.addWatchlistItem(it.shopType, it.itemId) }
-
-                    // Broadcast watchlistUpdate
-                    broadcastRaw(buildJsonObject {
-                        put("type", "watchlistUpdate")
-                        put("sessionId", sessionId)
-                        putJsonArray("watchlist") {
-                            newItems.forEach { w ->
-                                add(buildJsonObject {
-                                    put("shopType", w.shopType)
-                                    put("itemId", w.itemId)
-                                })
-                            }
-                        }
-                    }.toString())
-                }
-            }
-
-            "clearWatchlist" -> {
-                val current = viewModel.state.value.watchlist.toList()
-                current.forEach { viewModel.removeWatchlistItem(it.shopType, it.itemId) }
-                broadcastRaw(buildJsonObject {
-                    put("type", "watchlistUpdate")
-                    put("sessionId", sessionId)
-                    putJsonArray("watchlist") {}
-                }.toString())
-            }
-
-            "buyNow" -> {
-                val shopType = (obj["shopType"] as? JsonPrimitive)?.content ?: return
-                val itemId = (obj["itemId"] as? JsonPrimitive)?.content ?: return
-                val targetId = sessionId.ifBlank { viewModel.state.value.activeSessionId }
-                // Dùng purchaseAllShopItem (mua hết stock)
-                viewModel.purchaseAllShopItem(targetId, shopType, itemId)
-
-                broadcastRaw(buildJsonObject {
-                    put("type", "buyNowResult")
-                    put("sessionId", targetId)
-                    put("shopType", shopType)
-                    put("itemId", itemId)
-                    put("skipped", false)
-                    put("sent", 1)
-                }.toString())
-            }
-
-            "setAutoReconnect" -> {
-                // Android không có autoReconnect toggle riêng — ignore hoặc map
-            }
-
-            "setNotifyThreshold" -> {
-                // Không có trong Android — ignore
-            }
-        }
-    }
-
-    // ── Broadcast helpers ────────────────────────────────────────────────────
-
-    private suspend fun broadcastRaw(json: String) {
-        val dead = mutableListOf<DefaultWebSocketSession>()
-        wsClients.forEach { ws ->
-            runCatching { ws.send(Frame.Text(json)) }
-                .onFailure { dead.add(ws) }
-        }
-        wsClients.removeAll(dead)
-    }
-
-    private var lastState: UiState? = null
-
-    private suspend fun broadcastUpdate(state: UiState) {
-        val prev = lastState
-        lastState = state
-
-        if (prev == null) {
-            // Lần đầu — gửi snapshot
-            broadcastRaw(buildSnapshot(state))
-            return
-        }
-
-        // Gửi update cho từng session có thay đổi
-        state.sessions.forEach { session ->
-            val prevSession = prev.sessions.find { it.id == session.id }
-            if (prevSession != session) {
-                broadcastRaw(buildJsonObject {
-                    put("type", "update")
-                    put("sessionId", session.id)
-                    putJsonObject("payload") {
-                        put("state", session.status.toDashboardState())
-                        put("weather", session.weather)
-                        put("playerName", session.playerName)
-                        put("playerCount", session.players)
-                        put("connectedAt", if (session.connectedAt > 0) session.connectedAt / 1000.0 else null)
-                        putJsonArray("pets") { session.pets.forEach { pet -> add(petToJson(pet)) } }
-                        putJsonObject("shops") { session.shops.forEach { shop -> put(shop.type, shopToJson(shop)) } }
-                        putJsonArray("watchlist") {
-                            state.watchlist.forEach { w ->
-                                add(buildJsonObject {
-                                    put("shopType", w.shopType)
-                                    put("itemId", w.itemId)
-                                })
-                            }
-                        }
-                        // restockTimes
-                        putJsonObject("restockTimes") {
-                            session.shops.forEach { shop ->
-                                put(shop.type, shop.secondsUntilRestock)
-                            }
-                        }
-                    }
-                }.toString())
-            }
-        }
-    }
-
-    // ── Snapshot builder — Python dashboard format ───────────────────────────
-
-    private fun buildSnapshot(state: UiState): String {
-        return buildJsonObject {
-            put("type", "snapshot")
-            put("ts", System.currentTimeMillis() / 1000.0)
-            put("tunnelUrl", "")
-            putJsonArray("sessions") {
-                state.sessions.forEach { session ->
-                    add(buildJsonObject {
-                        put("sessionId", session.id)
-                        put("name", session.name)
-                        put("state", session.status.toDashboardState())
-                        put("room", session.room)
-                        put("version", session.gameVersion)
-                        put("playerName", session.playerName)
-                        put("playerCount", session.players)
-                        put("uptime", if (session.connectedAt > 0)
-                            (System.currentTimeMillis() - session.connectedAt) / 1000.0 else 0.0)
-                        put("connectedAt", if (session.connectedAt > 0) session.connectedAt / 1000.0 else null)
-                        put("weather", session.weather)
-                        put("autoReconnect", true)
-                        put("notifyThreshold", 0.10)
-                        put("lastAbility", "")
-
-                        // Pets
-                        putJsonArray("pets") {
-                            session.pets.forEach { pet -> add(petToJson(pet)) }
-                        }
-
-                        // Shops — object keyed by type
-                        putJsonObject("shops") {
-                            session.shops.forEach { shop ->
-                                put(shop.type, shopToJson(shop))
-                            }
-                        }
-
-                        // restockAt — map type → epoch seconds
-                        putJsonObject("restockAt") {
-                            val now = System.currentTimeMillis() / 1000.0
-                            session.shops.forEach { shop ->
-                                if (shop.secondsUntilRestock > 0) {
-                                    put(shop.type, now + shop.secondsUntilRestock)
-                                }
-                            }
-                        }
-
-                        // Watchlist
-                        putJsonArray("watchlist") {
-                            state.watchlist.forEach { w ->
-                                add(buildJsonObject {
-                                    put("shopType", w.shopType)
-                                    put("itemId", w.itemId)
-                                })
-                            }
-                        }
-
-                        // Logs (ability logs)
-                        putJsonArray("logs") {
-                            session.logs.takeLast(50).forEach { log ->
-                                add(buildJsonArray {
-                                    add(log.timestamp / 1000.0)
-                                    add("ABILITY")
-                                    add(log.action)
-                                })
-                            }
-                        }
-                    })
-                }
-            }
-        }.toString()
-    }
-
-    // ── Model converters ─────────────────────────────────────────────────────
-
-    private fun petToJson(pet: com.mgafk.app.data.model.PetSnapshot): kotlinx.serialization.json.JsonElement {
-        return buildJsonObject {
-            put("name", pet.name)
-            put("species", pet.species)
-            put("hunger", pet.hunger)
-            put("xp", pet.xp)
-            put("mutations", buildJsonArray { pet.mutations.forEach { add(it) } })
-            put("abilities", buildJsonArray { pet.abilities.forEach { add(it) } })
-            put("rarity", "")
-            put("strength", null as String?)
-            put("maxStrength", null as String?)
-        }
-    }
-
-    private fun shopToJson(shop: com.mgafk.app.data.model.ShopSnapshot): kotlinx.serialization.json.JsonElement {
-        return buildJsonObject {
-            put("secondsUntilRestock", shop.secondsUntilRestock)
-            putJsonArray("items") {
-                shop.itemStocks.forEach { (itemId, stock) ->
-                    add(buildJsonObject {
-                        // Set đúng key theo loại shop
-                        val key = when (shop.type) {
-                            "seed" -> "species"
-                            "tool" -> "toolId"
-                            "egg" -> "eggId"
-                            "decor" -> "decorId"
-                            else -> "id"
-                        }
-                        put(key, itemId)
-                        put("initialStock", stock)
-                        put("stock", stock)
-                    })
-                }
-            }
-        }
-    }
-
-    private fun SessionStatus.toDashboardState(): String = when (this) {
-        SessionStatus.IDLE -> "idle"
-        SessionStatus.CONNECTING -> "connecting"
-        SessionStatus.CONNECTED -> "connected"
-        SessionStatus.ERROR -> "error"
-    }
-
-    // ── Dashboard HTML (Python index.html được nhúng vào) ────────────────────
-
-    companion object {
-        val DASHBOARD_HTML: String get() = INDEX_HTML
-    }
-}
-
-// index.html từ Python project — đặt ở ngoài companion để tránh string quá dài trong class
-// REPLACE_MARKER — nội dung sẽ được thay bằng index.html thực tế
-private val INDEX_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -794,9 +375,9 @@ private val INDEX_HTML = """
     function fmt_uptime(seconds) {
       seconds = Math.floor(seconds);
       const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60;
-      if (h) return `${'$'}{h}h ${'$'}{String(m).padStart(2,'0')}m ${'$'}{String(s).padStart(2,'0')}s`;
-      if (m) return `${'$'}{m}m ${'$'}{String(s).padStart(2,'0')}s`;
-      return `${'$'}{s}s`;
+      if (h) return `${h}h ${String(m).padStart(2,'0')}m ${String(s).padStart(2,'0')}s`;
+      if (m) return `${m}m ${String(s).padStart(2,'0')}s`;
+      return `${s}s`;
     }
     function hungerColor(pct) {
       if (pct > 0.6) return 'hunger-high';
@@ -805,7 +386,7 @@ private val INDEX_HTML = """
     }
     function showToast(msg, type = '', duration = 3000) {
       const el = document.createElement('div');
-      el.className = `toast ${'$'}{type}`;
+      el.className = `toast ${type}`;
       el.textContent = msg;
       document.getElementById('toast-container').appendChild(el);
       setTimeout(() => el.remove(), duration);
@@ -829,7 +410,7 @@ private val INDEX_HTML = """
       inputEl.value = pct;
       notifyThresholds[sessionId] = pct;
       sendNotifyThreshold(sessionId, pct);
-      showToast(`🔔 Ngưỡng thông báo: ${'$'}{pct}%`, '', 2000);
+      showToast(`🔔 Ngưỡng thông báo: ${pct}%`, '', 2000);
     }
 
     // ── Watchlist helpers ─────────────────────────
@@ -839,11 +420,11 @@ private val INDEX_HTML = """
     function toggleWatchlist(sessionId, shopType, itemId) {
       const list = watchlists[sessionId] || [];
       const idx = list.findIndex(w => w.shopType === shopType && w.itemId === itemId);
-      if (idx >= 0) { list.splice(idx, 1); showToast(`🗑 Đã bỏ theo dõi: ${'$'}{itemId}`, 'warn'); }
-      else { list.push({ shopType, itemId }); showToast(`👁 Theo dõi: ${'$'}{itemId} — sẽ mua khi xuất hiện`, 'buy'); }
+      if (idx >= 0) { list.splice(idx, 1); showToast(`🗑 Đã bỏ theo dõi: ${itemId}`, 'warn'); }
+      else { list.push({ shopType, itemId }); showToast(`👁 Theo dõi: ${itemId} — sẽ mua khi xuất hiện`, 'buy'); }
       watchlists[sessionId] = list;
       sendWatchlist(sessionId);
-      const card = document.getElementById(`card-${'$'}{sessionId}`);
+      const card = document.getElementById(`card-${sessionId}`);
       if (card) refreshCard(sessionId);
     }
     function removeFromWatchlist(sessionId, shopType, itemId) {
@@ -851,7 +432,7 @@ private val INDEX_HTML = """
         w => !(w.shopType === shopType && w.itemId === itemId)
       );
       sendWatchlist(sessionId);
-      const card = document.getElementById(`card-${'$'}{sessionId}`);
+      const card = document.getElementById(`card-${sessionId}`);
       if (card) refreshCard(sessionId);
     }
     function sendWatchlist(sessionId) {
@@ -869,7 +450,7 @@ private val INDEX_HTML = """
     function buildSessionCard(sd) {
       const card = document.createElement('div');
       card.className = 'session-card';
-      card.id = `card-${'$'}{sd.sessionId}`;
+      card.id = `card-${sd.sessionId}`;
       card.innerHTML = renderCard(sd);
       attachCardEvents(card, sd.sessionId);
       return card;
@@ -877,7 +458,7 @@ private val INDEX_HTML = """
     function refreshCard(sessionId) {
       const sd = sessions[sessionId];
       if (!sd) return;
-      const card = document.getElementById(`card-${'$'}{sessionId}`);
+      const card = document.getElementById(`card-${sessionId}`);
       if (!card) return;
       card.innerHTML = renderCard(sd);
       attachCardEvents(card, sessionId);
@@ -895,7 +476,7 @@ private val INDEX_HTML = """
             sendBuyNow(sessionId, shopType, itemId, stock);
             el.classList.add('flash-buy');
             setTimeout(() => el.classList.remove('flash-buy'), 700);
-            showToast(`🛒 Đang mua ${'$'}{stock}x ${'$'}{itemId}...`, 'buy');
+            showToast(`🛒 Đang mua ${stock}x ${itemId}...`, 'buy');
           }
         });
       });
@@ -933,7 +514,7 @@ private val INDEX_HTML = """
     }
 
     function renderCard(sd) {
-      const statusClass = `status-${'$'}{sd.state}`;
+      const statusClass = `status-${sd.state}`;
       const uptime = sd.connectedAt ? fmt_uptime(Date.now()/1000 - sd.connectedAt) : '—';
       const wl = watchlists[sd.sessionId] || [];
       const threshPct = getThreshold(sd.sessionId);
@@ -948,20 +529,20 @@ private val INDEX_HTML = """
           const isHungry = petPct !== null && petPct * 100 < threshPct;
           const barHtml = petPct !== null
             ? `<div class="hunger-wrap">
-                <div class="hunger-bar-bg"><div class="hunger-bar-fill ${'$'}{hungerColor(petPct)}" style="width:${'$'}{(petPct*100).toFixed(0)}%"></div></div>
-                <span class="hunger-pct" style="${'$'}{isHungry ? 'color:var(--red);font-weight:700' : ''}">${'$'}{(petPct*100).toFixed(0)}%${'$'}{isHungry ? ' 🔔' : ''}</span>
+                <div class="hunger-bar-bg"><div class="hunger-bar-fill ${hungerColor(petPct)}" style="width:${(petPct*100).toFixed(0)}%"></div></div>
+                <span class="hunger-pct" style="${isHungry ? 'color:var(--red);font-weight:700' : ''}">${(petPct*100).toFixed(0)}%${isHungry ? ' 🔔' : ''}</span>
                </div>`
             : `<span class="hunger-pct" style="color:var(--text-dim)">—</span>`;
           const mutations = (pet.mutations || []).filter(Boolean);
-          const mutHtml = mutations.length ? `<span class="pet-mutations">✨ ${'$'}{mutations.join(', ')}</span>` : '';
+          const mutHtml = mutations.length ? `<span class="pet-mutations">✨ ${mutations.join(', ')}</span>` : '';
           const abilities = pet.abilities || [];
           const possible  = pet.possibleAbilities || [];
           let abilityHtml2 = '';
           if (abilities.length) {
-            const tags = abilities.map(a => `<span style="display:inline-block;background:rgba(14,165,233,0.15);color:var(--accent2);border-radius:4px;padding:2px 7px;margin:1px;font-size:10px;font-weight:500">${'$'}{esc(abilityName(a))}</span>`).join('');
-            abilityHtml2 = `<div style="margin-top:3px">⚡ ${'$'}{tags}</div>`;
+            const tags = abilities.map(a => `<span style="display:inline-block;background:rgba(14,165,233,0.15);color:var(--accent2);border-radius:4px;padding:2px 7px;margin:1px;font-size:10px;font-weight:500">${esc(abilityName(a))}</span>`).join('');
+            abilityHtml2 = `<div style="margin-top:3px">⚡ ${tags}</div>`;
           } else if (possible.length) {
-            abilityHtml2 = `<div style="margin-top:2px;font-size:10px;color:var(--text-dim);font-style:italic">⚡ ${'$'}{esc(possible.join(' / '))}</div>`;
+            abilityHtml2 = `<div style="margin-top:2px;font-size:10px;color:var(--text-dim);font-style:italic">⚡ ${esc(possible.join(' / '))}</div>`;
           }
           // ── Rarity / Strength / XP ───────────────────────────────
           const petXp          = pet.xp          || 0;
@@ -984,12 +565,12 @@ private val INDEX_HTML = """
               const strColor = strPct >= 80 ? '#a78bfa' : strPct >= 50 ? '#60a5fa' : '#94a3b8';
               strengthHtml = `<div style="margin-top:5px;display:flex;flex-direction:column;gap:4px">
                 <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
-                  ${'$'}{petRarity ? `<span style="font-size:10px;background:rgba(255,255,255,0.07);color:${'$'}{rarityColor};border-radius:4px;padding:1px 6px;font-weight:600">${'$'}{petRarity}</span>` : ''}
-                  <span style="font-size:11px;font-weight:600;color:var(--text);font-family:var(--mono)">💪 ${'$'}{petStrength}${'$'}{petMaxStrength ? ' / ' + petMaxStrength : ''}</span>
-                  ${'$'}{petXp > 0 ? `<span style="font-size:10px;color:var(--text-dim)">XP: ${'$'}{petXp.toLocaleString()}</span>` : ''}
+                  ${petRarity ? `<span style="font-size:10px;background:rgba(255,255,255,0.07);color:${rarityColor};border-radius:4px;padding:1px 6px;font-weight:600">${petRarity}</span>` : ''}
+                  <span style="font-size:11px;font-weight:600;color:var(--text);font-family:var(--mono)">💪 ${petStrength}${petMaxStrength ? ' / ' + petMaxStrength : ''}</span>
+                  ${petXp > 0 ? `<span style="font-size:10px;color:var(--text-dim)">XP: ${petXp.toLocaleString()}</span>` : ''}
                 </div>
-                ${'$'}{petMaxStrength ? `<div title="Strength: ${'$'}{petStrength}/${'$'}{petMaxStrength} (${'$'}{strPct}%)" style="width:100%;height:5px;background:rgba(255,255,255,0.08);border-radius:3px;overflow:hidden">
-                  <div style="width:${'$'}{strPct}%;height:100%;border-radius:3px;background:${'$'}{strColor};transition:width 0.5s"></div>
+                ${petMaxStrength ? `<div title="Strength: ${petStrength}/${petMaxStrength} (${strPct}%)" style="width:100%;height:5px;background:rgba(255,255,255,0.08);border-radius:3px;overflow:hidden">
+                  <div style="width:${strPct}%;height:100%;border-radius:3px;background:${strColor};transition:width 0.5s"></div>
                 </div>` : ''}
               </div>`;
             } else {
@@ -999,11 +580,11 @@ private val INDEX_HTML = """
               const xpPct     = petXp > 0 ? Math.min(100, (petXp / xpEstMax * 100)).toFixed(0) : 0;
               strengthHtml = `<div style="margin-top:5px;display:flex;flex-direction:column;gap:4px">
                 <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
-                  ${'$'}{petRarity ? `<span style="font-size:10px;background:rgba(255,255,255,0.07);color:${'$'}{rarityColor};border-radius:4px;padding:1px 6px;font-weight:600">${'$'}{petRarity}</span>` : ''}
-                  ${'$'}{petXp > 0 ? `<span style="font-size:10px;color:var(--text-dim)">✨ XP: ${'$'}{petXp.toLocaleString()}</span>` : ''}
+                  ${petRarity ? `<span style="font-size:10px;background:rgba(255,255,255,0.07);color:${rarityColor};border-radius:4px;padding:1px 6px;font-weight:600">${petRarity}</span>` : ''}
+                  ${petXp > 0 ? `<span style="font-size:10px;color:var(--text-dim)">✨ XP: ${petXp.toLocaleString()}</span>` : ''}
                 </div>
-                ${'$'}{petXp > 0 ? `<div title="XP ${'$'}{petXp.toLocaleString()}" style="width:100%;height:4px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden">
-                  <div style="width:${'$'}{xpPct}%;height:100%;border-radius:2px;background:linear-gradient(90deg,#a78bfa,#60a5fa);transition:width 0.5s"></div>
+                ${petXp > 0 ? `<div title="XP ${petXp.toLocaleString()}" style="width:100%;height:4px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden">
+                  <div style="width:${xpPct}%;height:100%;border-radius:2px;background:linear-gradient(90deg,#a78bfa,#60a5fa);transition:width 0.5s"></div>
                 </div>` : ''}
               </div>`;
             }
@@ -1011,9 +592,9 @@ private val INDEX_HTML = """
 
           const petSpriteUrl = sprite(pet.species);
           const petAvatar = petSpriteUrl
-            ? `<div style="width:48px;height:48px;background:rgba(255,255,255,0.04);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0"><img src="${'$'}{petSpriteUrl}" style="width:42px;height:42px;object-fit:contain;image-rendering:pixelated"></div>`
+            ? `<div style="width:48px;height:48px;background:rgba(255,255,255,0.04);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0"><img src="${petSpriteUrl}" style="width:42px;height:42px;object-fit:contain;image-rendering:pixelated"></div>`
             : `<div style="width:48px;height:48px;background:rgba(255,255,255,0.05);border-radius:10px;flex-shrink:0"></div>`;
-          petsHtml += `<div class="pet-row" style="${'$'}{isHungry ? 'border-color:rgba(248,113,113,0.4);background:rgba(248,113,113,0.05)' : ''}">${'$'}{petAvatar}<div class="pet-info" style="flex:1;min-width:0"><span class="pet-name">${'$'}{esc(pet.name||'?')}</span><span class="pet-species">${'$'}{esc(pet.species||'?')}</span>${'$'}{abilityHtml2}${'$'}{mutHtml}${'$'}{strengthHtml}</div>${'$'}{barHtml}</div>`;
+          petsHtml += `<div class="pet-row" style="${isHungry ? 'border-color:rgba(248,113,113,0.4);background:rgba(248,113,113,0.05)' : ''}">${petAvatar}<div class="pet-info" style="flex:1;min-width:0"><span class="pet-name">${esc(pet.name||'?')}</span><span class="pet-species">${esc(pet.species||'?')}</span>${abilityHtml2}${mutHtml}${strengthHtml}</div>${barHtml}</div>`;
         }
         petsHtml += '</div>';
       } else {
@@ -1031,7 +612,7 @@ private val INDEX_HTML = """
           const restockAt = (sd.restockAt || {})[type];
           const remaining = restockAt ? restockAt - Date.now() / 1000 : null;
           const restockStr = remaining != null
-            ? (remaining > 0 ? `restock ${'$'}{fmtSeconds(remaining)}` : 'restocking...')
+            ? (remaining > 0 ? `restock ${fmtSeconds(remaining)}` : 'restocking...')
             : '';
           let itemsHtml = '';
           if (items.length) {
@@ -1041,15 +622,15 @@ private val INDEX_HTML = """
               const watched = isInWatchlist(sd.sessionId, type, id);
               const itemSprite = sprite(id);
               const itemImg = itemSprite
-                ? `<img src="${'$'}{itemSprite}" style="width:26px;height:26px;object-fit:contain;image-rendering:pixelated;flex-shrink:0">`
+                ? `<img src="${itemSprite}" style="width:26px;height:26px;object-fit:contain;image-rendering:pixelated;flex-shrink:0">`
                 : '';
-              itemsHtml += `<div class="shop-item ${'$'}{watched ? 'in-watchlist' : ''}"
-                data-shop-type="${'$'}{esc(type)}" data-item-id="${'$'}{esc(id)}" data-stock="${'$'}{stock}"
-                title="${'$'}{watched ? '🟡 Đang theo dõi — click để bỏ' : 'Click = theo dõi | Right-click = mua ngay'}">
+              itemsHtml += `<div class="shop-item ${watched ? 'in-watchlist' : ''}"
+                data-shop-type="${esc(type)}" data-item-id="${esc(id)}" data-stock="${stock}"
+                title="${watched ? '🟡 Đang theo dõi — click để bỏ' : 'Click = theo dõi | Right-click = mua ngay'}">
                 <div class="shop-item-watch-dot"></div>
-                ${'$'}{itemImg}
-                <span class="shop-item-name">${'$'}{esc(id)}</span>
-                <span class="shop-item-stock">×${'$'}{stock}</span>
+                ${itemImg}
+                <span class="shop-item-name">${esc(id)}</span>
+                <span class="shop-item-stock">×${stock}</span>
               </div>`;
             }
           } else {
@@ -1057,10 +638,10 @@ private val INDEX_HTML = """
           }
           shopsHtml += `<div class="shop-section">
             <div class="shop-header">
-              <span class="shop-type-label">${'$'}{esc(type)}</span>
-              ${'$'}{restockStr ? `<span class="shop-restock" data-shop-type="${'$'}{esc(type)}">⏱ ${'$'}{esc(restockStr)}</span>` : ''}
+              <span class="shop-type-label">${esc(type)}</span>
+              ${restockStr ? `<span class="shop-restock" data-shop-type="${esc(type)}">⏱ ${esc(restockStr)}</span>` : ''}
             </div>
-            <div class="shop-items-grid">${'$'}{itemsHtml}</div>
+            <div class="shop-items-grid">${itemsHtml}</div>
           </div>`;
         }
         shopsHtml += '</div>';
@@ -1071,19 +652,19 @@ private val INDEX_HTML = """
       {
         const tags = wl.map(w =>
           `<div class="watchlist-tag">
-            <span>${'$'}{esc(w.shopType)}/${'$'}{esc(w.itemId)}</span>
-            <button class="watchlist-tag-remove" data-shop-type="${'$'}{esc(w.shopType)}" data-item-id="${'$'}{esc(w.itemId)}" title="Bỏ theo dõi">×</button>
+            <span>${esc(w.shopType)}/${esc(w.itemId)}</span>
+            <button class="watchlist-tag-remove" data-shop-type="${esc(w.shopType)}" data-item-id="${esc(w.itemId)}" title="Bỏ theo dõi">×</button>
           </div>`
         ).join('');
         watchlistHtml = `<div class="watchlist-panel">
           <div class="watchlist-header">
-            <div class="watchlist-title">👁 Watchlist ${'$'}{wl.length ? `<span style="background:rgba(251,191,36,0.2);border-radius:10px;padding:1px 7px;font-size:10px">${'$'}{wl.length}</span>` : ''}</div>
-            ${'$'}{wl.length ? `<button class="watchlist-clear-btn">Xóa tất cả</button>` : ''}
+            <div class="watchlist-title">👁 Watchlist ${wl.length ? `<span style="background:rgba(251,191,36,0.2);border-radius:10px;padding:1px 7px;font-size:10px">${wl.length}</span>` : ''}</div>
+            ${wl.length ? `<button class="watchlist-clear-btn">Xóa tất cả</button>` : ''}
           </div>
           <div class="watchlist-items">
-            ${'$'}{tags || '<span class="watchlist-empty">Chưa có item nào — click vào item trong shop để theo dõi</span>'}
+            ${tags || '<span class="watchlist-empty">Chưa có item nào — click vào item trong shop để theo dõi</span>'}
           </div>
-          ${'$'}{wl.length ? '<div class="watchlist-hint">Bot sẽ tự động mua khi item xuất hiện trong shop</div>' : ''}
+          ${wl.length ? '<div class="watchlist-hint">Bot sẽ tự động mua khi item xuất hiện trong shop</div>' : ''}
         </div>`;
       }
 
@@ -1103,7 +684,7 @@ private val INDEX_HTML = """
               <input
                 class="notify-threshold-input"
                 type="number" min="1" max="99" step="1"
-                value="${'$'}{threshPct}"
+                value="${threshPct}"
                 title="Gửi thông báo khi hunger dưới mức này">
               <span class="notify-pct-sign">%</span>
             </div>
@@ -1114,7 +695,7 @@ private val INDEX_HTML = """
       const itemsLinkHtml = `<a href="/items" style="font-size:11px;color:var(--accent2);text-decoration:none;display:inline-flex;align-items:center;gap:4px;margin-top:4px;opacity:0.8" target="_blank">📦 Xem tất cả vật phẩm →</a>`;
       let abilityHtml = '';
       if (sd.lastAbility) {
-        abilityHtml = `<div class="ability-badge"><span class="ability-icon">⚡</span><span class="ability-text">${'$'}{esc(sd.lastAbility)}</span></div>`;
+        abilityHtml = `<div class="ability-badge"><span class="ability-icon">⚡</span><span class="ability-text">${esc(sd.lastAbility)}</span></div>`;
       }
 
       // ── Idle overlay ──
@@ -1123,43 +704,43 @@ private val INDEX_HTML = """
           <div class="idle-icon">🔌</div>
           <div class="idle-msg">Session chưa kết nối</div>
           <div class="idle-btns">
-            <button class="btn-reconnect" onclick="reconnectSession('${'$'}{esc(sd.sessionId)}','${'$'}{esc(sd.name)}')">↻ Kết nối lại</button>
-            <button class="btn-delete" onclick="deleteSession('${'$'}{esc(sd.sessionId)}')">🗑 Xóa</button>
+            <button class="btn-reconnect" onclick="reconnectSession('${esc(sd.sessionId)}','${esc(sd.name)}')">↻ Kết nối lại</button>
+            <button class="btn-delete" onclick="deleteSession('${esc(sd.sessionId)}')">🗑 Xóa</button>
           </div>
         </div>` : '';
 
       return `
         <div class="card-header">
           <div class="card-title">
-            ${'$'}{esc(sd.name)}
-            ${'$'}{sd.room ? `<span class="room-code">${'$'}{esc(sd.room)}</span>` : ''}
+            ${esc(sd.name)}
+            ${sd.room ? `<span class="room-code">${esc(sd.room)}</span>` : ''}
           </div>
           <div class="session-actions">
             <label class="toggle" title="Tự động kết nối lại" style="width:32px;height:18px">
-              <input type="checkbox" ${'$'}{sd.autoReconnect !== false ? 'checked' : ''}
-                onchange="setAutoReconnect('${'$'}{esc(sd.sessionId)}', this.checked)">
+              <input type="checkbox" ${sd.autoReconnect !== false ? 'checked' : ''}
+                onchange="setAutoReconnect('${esc(sd.sessionId)}', this.checked)">
               <span class="toggle-slider"></span>
             </label>
             <span class="ar-toggle-label">Auto</span>
-            <span class="status-badge ${'$'}{statusClass}">${'$'}{esc(sd.state)}</span>
-            ${'$'}{sd.state !== 'idle' ? `<button class="btn-disconnect" onclick="disconnectSession('${'$'}{esc(sd.sessionId)}')">✕</button>` : ''}
+            <span class="status-badge ${statusClass}">${esc(sd.state)}</span>
+            ${sd.state !== 'idle' ? `<button class="btn-disconnect" onclick="disconnectSession('${esc(sd.sessionId)}')">✕</button>` : ''}
           </div>
         </div>
         <div class="card-body">
-          ${'$'}{idleHtml}
-          <div style="${'$'}{sd.state==='idle'?'display:none':''}">
+          ${idleHtml}
+          <div style="${sd.state==='idle'?'display:none':''}">
             <div class="stat-grid">
-              <div class="stat"><div class="stat-label">Player</div><div class="stat-value" style="font-size:13px">${'$'}{esc(sd.playerName||'—')}</div></div>
-              <div class="stat"><div class="stat-label">Online</div><div class="stat-value">${'$'}{sd.playerCount??'—'}</div></div>
-              <div class="stat"><div class="stat-label">Uptime</div><div class="stat-value" style="font-size:12px">${'$'}{sd.state==='connected'?uptime:'—'}</div></div>
-              <div class="stat"><div class="stat-label">Weather</div><div class="stat-value" style="font-size:12px;display:flex;align-items:center;gap:5px">${'$'}{(()=>{const ws=weatherSprite(sd.weather);return ws?`<img src="${'$'}{ws}" style="width:22px;height:22px;object-fit:contain">`:''})()}${'$'}{esc(sd.weather||'—')}</div></div>
+              <div class="stat"><div class="stat-label">Player</div><div class="stat-value" style="font-size:13px">${esc(sd.playerName||'—')}</div></div>
+              <div class="stat"><div class="stat-label">Online</div><div class="stat-value">${sd.playerCount??'—'}</div></div>
+              <div class="stat"><div class="stat-label">Uptime</div><div class="stat-value" style="font-size:12px">${sd.state==='connected'?uptime:'—'}</div></div>
+              <div class="stat"><div class="stat-label">Weather</div><div class="stat-value" style="font-size:12px;display:flex;align-items:center;gap:5px">${(()=>{const ws=weatherSprite(sd.weather);return ws?`<img src="${ws}" style="width:22px;height:22px;object-fit:contain">`:''})()}${esc(sd.weather||'—')}</div></div>
             </div>
-            ${'$'}{petsHtml}
-            ${'$'}{notifyHtml}
-            ${'$'}{shopsHtml}
-            ${'$'}{watchlistHtml}
-            ${'$'}{itemsLinkHtml}
-            ${'$'}{abilityHtml}
+            ${petsHtml}
+            ${notifyHtml}
+            ${shopsHtml}
+            ${watchlistHtml}
+            ${itemsLinkHtml}
+            ${abilityHtml}
           </div>
         </div>`;
     }
@@ -1167,15 +748,15 @@ private val INDEX_HTML = """
     function fmtSeconds(s) {
       s = Math.max(0, Math.floor(s));
       const m = Math.floor(s / 60), sec = s % 60;
-      if (m > 0) return `${'$'}{m}m ${'$'}{String(sec).padStart(2,'0')}s`;
-      return `${'$'}{sec}s`;
+      if (m > 0) return `${m}m ${String(sec).padStart(2,'0')}s`;
+      return `${sec}s`;
     }
 
     function upsertCard(sd) {
       const grid  = document.getElementById('sessions-grid');
       const empty = document.getElementById('empty-state');
       if (empty) empty.remove();
-      const existing = document.getElementById(`card-${'$'}{sd.sessionId}`);
+      const existing = document.getElementById(`card-${sd.sessionId}`);
       if (existing) {
         // Giữ lại focus nếu user đang gõ vào threshold input
         const focused = existing.querySelector('.notify-threshold-input') === document.activeElement;
@@ -1191,8 +772,8 @@ private val INDEX_HTML = """
       const ts  = new Date().toLocaleTimeString('en-GB');
       const row = document.createElement('div');
       row.className = 'log-row';
-      const levelClass = `level-${'$'}{level.toUpperCase()}`;
-      row.innerHTML = `<span class="log-ts">${'$'}{ts}</span><span class="log-session">${'$'}{esc(sessionName)}</span><span class="log-level ${'$'}{levelClass}">[${'$'}{esc(level)}]</span><span class="log-msg">${'$'}{esc(msg)}</span>`;
+      const levelClass = `level-${level.toUpperCase()}`;
+      row.innerHTML = `<span class="log-ts">${ts}</span><span class="log-session">${esc(sessionName)}</span><span class="log-level ${levelClass}">[${esc(level)}]</span><span class="log-msg">${esc(msg)}</span>`;
       logContainer.appendChild(row);
       while (logContainer.children.length > 300) logContainer.removeChild(logContainer.firstChild);
       if (autoScroll) logContainer.scrollTop = logContainer.scrollHeight;
@@ -1204,7 +785,7 @@ private val INDEX_HTML = """
 
     function connect() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      ws = new WebSocket(`${'$'}{proto}://${'$'}{location.host}/ws`);
+      ws = new WebSocket(`${proto}://${location.host}/ws`);
       ws.onopen  = () => { dot.classList.add('live'); clearTimeout(reconnectTimer); };
       ws.onclose = () => { dot.classList.remove('live'); reconnectTimer = setTimeout(connect, 3000); };
       ws.onerror = () => { dot.classList.remove('live'); };
@@ -1266,7 +847,7 @@ private val INDEX_HTML = """
         notifyThresholds[data.sessionId] = Math.round(data.threshold * 100);
         const sd = sessions[data.sessionId];
         const name = sd ? sd.name : data.sessionId;
-        addLog(name, 'NOTIFY', `🔔 Ngưỡng thông báo: ${'$'}{Math.round(data.threshold * 100)}%`);
+        addLog(name, 'NOTIFY', `🔔 Ngưỡng thông báo: ${Math.round(data.threshold * 100)}%`);
         return;
       }
 
@@ -1281,7 +862,7 @@ private val INDEX_HTML = """
         // Hiển thị dạng "AbilityName (PetName, Species)" trong card
         const ability = data.action || data.detail || '';
         const pet     = [data.petName, data.petSpecies].filter(Boolean).join(', ');
-        const display = pet ? `${'$'}{ability} (${'$'}{pet})` : ability;
+        const display = pet ? `${ability} (${pet})` : ability;
         if (sd) { sd.lastAbility = display; upsertCard(sd); }
         addLog(sd ? sd.name : data.sessionId, 'ABILITY', display);
         return;
@@ -1298,15 +879,15 @@ private val INDEX_HTML = """
         const sd   = sessions[data.sessionId];
         const name = sd ? sd.name : data.sessionId;
         if (!data.skipped) {
-          addLog(name, 'BUY', `✅ Watchlist: mua ${'$'}{data.quantity}x ${'$'}{data.itemId} (${'$'}{data.shopType})`);
-          showToast(`✅ Đã mua ${'$'}{data.quantity}x ${'$'}{data.itemId}`, 'buy', 4000);
-          const card = document.getElementById(`card-${'$'}{data.sessionId}`);
+          addLog(name, 'BUY', `✅ Watchlist: mua ${data.quantity}x ${data.itemId} (${data.shopType})`);
+          showToast(`✅ Đã mua ${data.quantity}x ${data.itemId}`, 'buy', 4000);
+          const card = document.getElementById(`card-${data.sessionId}`);
           if (card) {
-            const el = card.querySelector(`[data-item-id="${'$'}{data.itemId}"]`);
+            const el = card.querySelector(`[data-item-id="${data.itemId}"]`);
             if (el) { el.classList.add('flash-buy'); setTimeout(() => el.classList.remove('flash-buy'), 700); }
           }
         } else {
-          addLog(name, 'WARN', `⚠ Watchlist skip: ${'$'}{data.itemId} — ${'$'}{data.skipReason}`);
+          addLog(name, 'WARN', `⚠ Watchlist skip: ${data.itemId} — ${data.skipReason}`);
         }
         return;
       }
@@ -1315,11 +896,11 @@ private val INDEX_HTML = """
         const sd   = sessions[data.sessionId];
         const name = sd ? sd.name : data.sessionId;
         if (!data.skipped) {
-          addLog(name, 'BUY', `🛒 Mua ngay: ${'$'}{data.sent}x ${'$'}{data.itemId} (${'$'}{data.shopType})`);
-          showToast(`✅ Đã mua ${'$'}{data.sent}x ${'$'}{data.itemId}`, 'buy');
+          addLog(name, 'BUY', `🛒 Mua ngay: ${data.sent}x ${data.itemId} (${data.shopType})`);
+          showToast(`✅ Đã mua ${data.sent}x ${data.itemId}`, 'buy');
         } else {
-          addLog(name, 'WARN', `Mua ngay thất bại: ${'$'}{data.itemId} — ${'$'}{data.skipReason}`);
-          showToast(`⚠ Thất bại: ${'$'}{data.skipReason}`, 'warn');
+          addLog(name, 'WARN', `Mua ngay thất bại: ${data.itemId} — ${data.skipReason}`);
+          showToast(`⚠ Thất bại: ${data.skipReason}`, 'warn');
         }
         return;
       }
@@ -1357,7 +938,7 @@ private val INDEX_HTML = """
       // Uptime
       for (const sd of Object.values(sessions)) {
         if (sd.state === 'connected' && sd.connectedAt) {
-          const card = document.getElementById(`card-${'$'}{sd.sessionId}`);
+          const card = document.getElementById(`card-${sd.sessionId}`);
           if (!card) continue;
           const els = card.querySelectorAll('.stat-value');
           if (els[2]) els[2].textContent = fmt_uptime(Date.now()/1000 - sd.connectedAt);
@@ -1367,7 +948,7 @@ private val INDEX_HTML = """
       const now = Date.now() / 1000;
       for (const sd of Object.values(sessions)) {
         if (!sd.restockAt) continue;
-        const card = document.getElementById(`card-${'$'}{sd.sessionId}`);
+        const card = document.getElementById(`card-${sd.sessionId}`);
         if (!card) continue;
         card.querySelectorAll('.shop-restock').forEach(el => {
           const shopType = el.dataset.shopType;
@@ -1375,7 +956,7 @@ private val INDEX_HTML = """
           const restockAt = sd.restockAt[shopType];
           if (restockAt == null) return;
           const remaining = restockAt - now;
-          el.textContent = remaining > 0 ? `⏱ restock ${'$'}{fmtSeconds(remaining)}` : '⏱ restocking...';
+          el.textContent = remaining > 0 ? `⏱ restock ${fmtSeconds(remaining)}` : '⏱ restocking...';
         });
       }
     }, 1000);
@@ -1391,7 +972,7 @@ private val INDEX_HTML = """
       } else {
         const count = Object.keys(sessions).length + 1;
         const el = document.getElementById('cp-name');
-        if (el && /^Account \d+${'$'}/.test(el.value)) el.value = 'Account ' + count;
+        if (el && /^Account \d+$/.test(el.value)) el.value = 'Account ' + count;
       }
       m.classList.add('open');
       setTimeout(() => document.getElementById('cp-cookie')?.focus(), 80);
@@ -1453,5 +1034,3 @@ private val INDEX_HTML = """
   </script>
 </body>
 </html>
-
-""".trimIndent()
