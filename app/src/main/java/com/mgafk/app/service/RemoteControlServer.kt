@@ -13,7 +13,7 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
-import kotlin.time.Duration.Companion.seconds
+
 import io.ktor.websocket.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -62,10 +62,6 @@ class RemoteControlServer(
 
         server = embeddedServer(Netty, port = PORT, host = "0.0.0.0") {
             install(WebSockets) {
-                pingPeriod = 30.seconds
-                timeout = 60.seconds
-                maxFrameSize = Long.MAX_VALUE
-                masking = false
             }
             routing {
                 // ── Web UI ──
