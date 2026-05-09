@@ -51,7 +51,7 @@ import com.mgafk.app.ui.theme.SurfaceDark
 import com.mgafk.app.ui.theme.TextMuted
 import com.mgafk.app.ui.theme.TextPrimary
 
-private val WATCHLIST_SHOP_TYPES = listOf("seed", "tool", "egg")
+private val WATCHLIST_SHOP_TYPES = listOf("seed", "tool", "egg", "dawn")
 
 /**
  * Card hiển thị danh sách Watchlist items.
@@ -148,6 +148,7 @@ private fun WatchlistChip(
         "seed" -> "plants"
         "tool" -> "items"
         "egg" -> "eggs"
+        "dawn" -> "plants"
         else -> "items"
     }
     val spriteUrl = MgApi.findItem(item.itemId)?.sprite?.let {
@@ -204,11 +205,17 @@ private fun AddWatchlistDialog(
     val existing = existingWatchlist.map { it.shopType to it.itemId }.toSet()
 
     // Lấy toàn bộ items từ MgApi, chia theo nhóm
-    val groupedItems = remember(existingWatchlist) {
+    val groupedItems = remember(existingWatchlist, shops) {
+        val dawnShopItems = shops.find { it.type == "dawn" }?.let { dawnShop ->
+            dawnShop.itemNames.mapNotNull { itemId ->
+                MgApi.findItem(itemId)?.takeIf { ("dawn" to itemId) !in existing }
+            }.sortedBy { it.name }
+        } ?: emptyList()
+
         mapOf(
             "seed" to MgApi.getPlants().values
                 .filter { (it.id to "seed") !in existing.map { e -> e.second to e.first } }
-                .let { plants ->
+                .let { _ ->
                     MgApi.getPlants().values
                         .filter { entry -> ("seed" to entry.id) !in existing }
                         .sortedBy { it.name }
@@ -219,11 +226,12 @@ private fun AddWatchlistDialog(
             "egg" to MgApi.getEggs().values
                 .filter { ("egg" to it.id) !in existing }
                 .sortedBy { it.name },
+            "dawn" to dawnShopItems,
         )
     }
 
-    val tabLabels = listOf("Seed", "Tool", "Egg")
-    val tabTypes = listOf("seed", "tool", "egg")
+    val tabLabels = listOf("Seed", "Tool", "Egg", "Dawn")
+    val tabTypes = listOf("seed", "tool", "egg", "dawn")
     var selectedTab by remember { mutableStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
@@ -323,6 +331,7 @@ private fun AddWatchlistDialog(
                                 "seed" -> "plants"
                                 "tool" -> "items"
                                 "egg" -> "eggs"
+                                "dawn" -> "plants"
                                 else -> "items"
                             }
                             val spriteUrl = entry.sprite?.let {
