@@ -28,9 +28,12 @@ object Constants {
         "bunny" to 750, "dragonfly" to 250, "pig" to 50000, "cow" to 25000,
         "turkey" to 500, "squirrel" to 15000, "turtle" to 100000, "goat" to 20000,
         "snowfox" to 14000, "stoat" to 10000, "whitecaribou" to 30000,
-        "caribou" to 30000, "pony" to 4000, "horse" to 4000,
+        "caribou" to 30000, "pony" to 4000, "horse" to 25000,
         "firehorse" to 200000, "butterfly" to 25000, "capybara" to 150000,
         "peacock" to 100000,
+        // New pets
+        "ostrich" to 40000,
+        "sheep" to 250,
     )
 
     val RESTOCK_SECONDS = mapOf(
