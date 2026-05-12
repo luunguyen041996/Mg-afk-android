@@ -47,6 +47,7 @@ import com.mgafk.app.data.model.TeamTrigger
 import com.mgafk.app.data.model.WatchlistItem
 import com.mgafk.app.data.websocket.ClientEvent
 import com.mgafk.app.data.websocket.RoomClient
+import com.mgafk.app.data.websocket.Constants
 import com.mgafk.app.service.AfkService
 import com.mgafk.app.service.AlertNotifier
 import kotlinx.serialization.json.JsonArray
@@ -1700,7 +1701,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val hungerMap = session.pets.associate { pet ->
             val species = pet.species.lowercase()
             val maxHunger = Constants.PET_HUNGER_COSTS[species]?.toDouble() ?: 1000.0
-            val hungerPct = ((pet.hunger.toDouble() / maxHunger) * 100.0).coerceIn(0.0, 100.0)
+            val hungerPct = (pet.hunger / maxHunger * 100.0).coerceIn(0.0, 100.0)
             pet.id to hungerPct
         }
 

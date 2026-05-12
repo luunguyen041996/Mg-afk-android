@@ -75,6 +75,7 @@ import com.mgafk.app.data.repository.MgApi
 import com.mgafk.app.ui.components.AppCard
 import com.mgafk.app.ui.components.SpriteImage
 import com.mgafk.app.ui.theme.Accent
+import com.mgafk.app.ui.theme.AccentDim
 import com.mgafk.app.ui.theme.StatusConnected
 import com.mgafk.app.ui.theme.StatusError
 import com.mgafk.app.ui.theme.SurfaceBorder
