@@ -162,6 +162,7 @@ fun InventoryCard(
     petHutchCount: Int = 0,
     petHutchMax: Int = 25,
     seedSiloCount: Int = 0,
+    seedSiloMax: Int = 200,
     seedSiloSpecies: Set<String> = emptySet(),
     decorShedCount: Int = 0,
     decorShedDecorIds: Set<String> = emptySet(),

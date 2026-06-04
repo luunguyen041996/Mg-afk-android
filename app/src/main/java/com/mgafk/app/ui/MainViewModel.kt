@@ -1813,7 +1813,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (team.id == teamId) team.copy(triggers = team.triggers + trigger) else team
             })
         }
-        persistPetTeams(sessionId)
     }
 
     fun removeTeamTrigger(sessionId: String, teamId: String, triggerId: String) {
@@ -1822,7 +1821,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (team.id == teamId) team.copy(triggers = team.triggers.filter { it.id != triggerId }) else team
             })
         }
-        persistPetTeams(sessionId)
     }
 
     // ---- Card collapse persistence ----
