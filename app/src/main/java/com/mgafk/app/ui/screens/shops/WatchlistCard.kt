@@ -51,7 +51,7 @@ import com.mgafk.app.ui.theme.SurfaceDark
 import com.mgafk.app.ui.theme.TextMuted
 import com.mgafk.app.ui.theme.TextPrimary
 
-private val WATCHLIST_SHOP_TYPES = listOf("seed", "tool", "egg", "dawn")
+private val WATCHLIST_SHOP_TYPES = listOf("seed", "tool", "egg", "dawn", "snow")
 
 /**
  * Card hiển thị danh sách Watchlist items.
@@ -149,6 +149,7 @@ private fun WatchlistChip(
         "tool" -> "items"
         "egg" -> "eggs"
         "dawn" -> "plants"
+        "snow" -> "plants"
         else -> "items"
     }
     val spriteUrl = MgApi.findItem(item.itemId)?.sprite?.let {
@@ -212,6 +213,12 @@ private fun AddWatchlistDialog(
             }.sortedBy { it.name }
         } ?: emptyList()
 
+        val snowShopItems = shops.find { it.type == "snow" }?.let { snowShop ->
+            snowShop.itemNames.mapNotNull { itemId ->
+                MgApi.findItem(itemId)?.takeIf { ("snow" to itemId) !in existing }
+            }.sortedBy { it.name }
+        } ?: emptyList()
+
         mapOf(
             "seed" to MgApi.getPlants().values
                 .filter { (it.id to "seed") !in existing.map { e -> e.second to e.first } }
@@ -227,11 +234,12 @@ private fun AddWatchlistDialog(
                 .filter { ("egg" to it.id) !in existing }
                 .sortedBy { it.name },
             "dawn" to dawnShopItems,
+            "snow" to snowShopItems,
         )
     }
 
-    val tabLabels = listOf("Seed", "Tool", "Egg", "Dawn")
-    val tabTypes = listOf("seed", "tool", "egg", "dawn")
+    val tabLabels = listOf("Seed", "Tool", "Egg", "Dawn", "Snow")
+    val tabTypes = listOf("seed", "tool", "egg", "dawn", "snow")
     var selectedTab by remember { mutableStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
@@ -332,6 +340,7 @@ private fun AddWatchlistDialog(
                                 "tool" -> "items"
                                 "egg" -> "eggs"
                                 "dawn" -> "plants"
+                                "snow" -> "plants"
                                 else -> "items"
                             }
                             val spriteUrl = entry.sprite?.let {
