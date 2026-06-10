@@ -32,6 +32,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
@@ -57,6 +60,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.mgafk.app.data.model.AlarmSchedule
 import com.mgafk.app.data.model.AppSettings
+import com.mgafk.app.data.model.AutoHarvestConfig
 import com.mgafk.app.data.model.PurchaseMode
 import com.mgafk.app.data.model.WakeLockMode
 import com.mgafk.app.data.model.isSilentAt
@@ -64,7 +68,9 @@ import java.time.LocalDateTime
 import kotlinx.coroutines.delay
 import com.mgafk.app.ui.components.AppCard
 import com.mgafk.app.ui.theme.Accent
+import com.mgafk.app.ui.theme.AccentDim
 import com.mgafk.app.ui.theme.SurfaceBorder
+import com.mgafk.app.ui.theme.SurfaceDark
 import com.mgafk.app.ui.theme.TextMuted
 import com.mgafk.app.ui.theme.TextPrimary
 import com.mgafk.app.ui.theme.TextSecondary
@@ -86,6 +92,7 @@ fun SettingsCards(
         onPreviewAlarm = onPreviewAlarm,
         onStopPreviewAlarm = onStopPreviewAlarm,
     )
+    AutoHarvestCard(settings = settings, onUpdate = onUpdate)
     ReconnectionCard(settings = settings, onUpdate = onUpdate)
     DeveloperCard(settings = settings, onUpdate = onUpdate)
 }
@@ -816,6 +823,82 @@ private fun ReconnectionCard(settings: AppSettings, onUpdate: (AppSettings) -> U
 // ── Developer Options ──
 
 @Composable
+@Composable
+private fun AutoHarvestCard(settings: AppSettings, onUpdate: (AppSettings) -> Unit) {
+    AppCard(title = "Auto Harvest", persistKey = "settings.autoHarvest", collapsible = true) {
+        ToggleRow(
+            title = "Enable Auto Harvest",
+            description = "Automatically harvest crops when they reach 100% size and meet mutation conditions.",
+            checked = config.enabled,
+            onCheckedChange = { onUpdate(settings.copy(autoHarvest = config.copy(enabled = it))) },
+        )
+
+        if (config.enabled) {
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Mutation condition selector
+            Text("Mutation condition", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    AutoHarvestConfig.MutationCondition.NONE to "No mutation needed",
+                    AutoHarvestConfig.MutationCondition.ANY to "Any mutation",
+                    AutoHarvestConfig.MutationCondition.SPECIFIC to "Specific mutation",
+                ).forEach { (condition, label) ->
+                    val selected = config.mutationCondition == condition
+                    Box(
+                        modifier = Modifier
+                            .background(
+                                if (selected) AccentDim else SurfaceBorder,
+                                RoundedCornerShape(8.dp)
+                            )
+                            .clickable {
+                                onUpdate(settings.copy(autoHarvest = config.copy(mutationCondition = condition)))
+                            }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    ) {
+                        Text(label, fontSize = 12.sp, color = if (selected) TextPrimary else TextSecondary)
+                    }
+                }
+            }
+
+            if (config.mutationCondition == AutoHarvestConfig.MutationCondition.SPECIFIC) {
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = config.requiredMutation,
+                    onValueChange = { onUpdate(settings.copy(autoHarvest = config.copy(requiredMutation = it))) },
+                    label = { Text("Required mutation") },
+                    placeholder = { Text("e.g. Rainbow, Gold", color = TextSecondary) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AccentDim,
+                        unfocusedBorderColor = SurfaceBorder,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                    ),
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = config.speciesFilter,
+                onValueChange = { onUpdate(settings.copy(autoHarvest = config.copy(speciesFilter = it))) },
+                label = { Text("Species filter (optional)") },
+                placeholder = { Text("e.g. Sunflower — leave empty for all", color = TextSecondary) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = AccentDim,
+                    unfocusedBorderColor = SurfaceBorder,
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary,
+                ),
+            )
+        }
+    }
+}
+
 private fun DeveloperCard(settings: AppSettings, onUpdate: (AppSettings) -> Unit) {
     AppCard(title = "Developer Options", collapsible = true, persistKey = "settings_dev") {
         ToggleRow(

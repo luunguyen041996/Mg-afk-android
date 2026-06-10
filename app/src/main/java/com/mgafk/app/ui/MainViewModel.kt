@@ -673,6 +673,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { repo.saveWatchlist(updated) }
     }
 
+    fun updateAutoHarvest(config: com.mgafk.app.data.model.AutoHarvestConfig) {
+        val updated = _state.value.settings.copy(autoHarvest = config)
+        _state.update { it.copy(settings = updated) }
+        viewModelScope.launch { repo.saveSettings(updated) }
+    }
+
     fun purchaseShopItem(sessionId: String, shopType: String, itemName: String) {
         val actions = clients[sessionId]?.actions ?: return
 
@@ -1459,7 +1465,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun checkAutoHarvest(sessionId: String, garden: List<com.mgafk.app.data.model.GardenPlantSnapshot>) {
+        val config = _state.value.settings.autoHarvest
+        if (!config.enabled) return
+        val actions = clients[sessionId]?.actions ?: return
+
+        val toHarvest = garden.filter { plant ->
+            // Cây phải đạt 100%
+            if (plant.targetScale < 1.0) return@filter false
+
+            // Filter theo loài nếu có
+            if (config.speciesFilter.isNotBlank() &&
+                !plant.species.lowercase().contains(config.speciesFilter.lowercase())) return@filter false
+
+            // Điều kiện đột biến
+            when (config.mutationCondition) {
+                com.mgafk.app.data.model.AutoHarvestConfig.MutationCondition.NONE -> true
+                com.mgafk.app.data.model.AutoHarvestConfig.MutationCondition.ANY ->
+                    plant.mutations.isNotEmpty()
+                com.mgafk.app.data.model.AutoHarvestConfig.MutationCondition.SPECIFIC ->
+                    plant.mutations.any { m ->
+                        m.lowercase().contains(config.requiredMutation.lowercase())
+                    }
+            }
+        }
+
+        if (toHarvest.isEmpty()) return
+        AppLog.d(TAG, "[$sessionId] Auto-harvesting ${toHarvest.size} plants")
+
+        viewModelScope.launch {
+            for (plant in toHarvest) {
+                actions.harvestCrop(slot = plant.tileId, slotsIndex = plant.slotIndex)
+                delay(300L)
+            }
+        }
+    }
+
     private suspend fun startWeatherReconnectPolling(sessionId: String) {
+        val sessionName = _state.value.sessions.find { it.id == sessionId }?.name ?: sessionId
         val sessionName = _state.value.sessions.find { it.id == sessionId }?.name ?: sessionId
         val badWeatherKeywords = listOf("dawn", "thunderstorm", "thunder")
         val httpClient = okhttp3.OkHttpClient.Builder()
@@ -2091,6 +2134,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val freeTiles = clients[sessionId]?.let { computeFreePlantTileCount(it) } ?: 0
                 updateSession(sessionId) { it.copy(garden = newGarden, freePlantTiles = freeTiles) }
                 evaluateTeamTriggers(sessionId)
+                // Auto harvest
+                checkAutoHarvest(sessionId, newGarden)
             }
             is ClientEvent.InventoryChanged -> {
                 val seeds = mutableListOf<InventorySeedItem>()

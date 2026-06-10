@@ -91,6 +91,9 @@ data class AppSettings(
     // Weather
     val disconnectOnBadWeather: Boolean = false,
 
+    // Auto Harvest
+    val autoHarvest: AutoHarvestConfig = AutoHarvestConfig(),
+
     // Developer
     val showDebugMenu: Boolean = false,
 )
