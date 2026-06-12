@@ -1503,7 +1503,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun startWeatherReconnectPolling(sessionId: String) {
         val sessionName = _state.value.sessions.find { it.id == sessionId }?.name ?: sessionId
-        val sessionName = _state.value.sessions.find { it.id == sessionId }?.name ?: sessionId
         val badWeatherKeywords = listOf("dawn", "thunderstorm", "thunder")
         val httpClient = okhttp3.OkHttpClient.Builder()
             .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)

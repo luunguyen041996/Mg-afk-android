@@ -823,8 +823,8 @@ private fun ReconnectionCard(settings: AppSettings, onUpdate: (AppSettings) -> U
 // ── Developer Options ──
 
 @Composable
-@Composable
 private fun AutoHarvestCard(settings: AppSettings, onUpdate: (AppSettings) -> Unit) {
+    val config = settings.autoHarvest
     AppCard(title = "Auto Harvest", persistKey = "settings.autoHarvest", collapsible = true) {
         ToggleRow(
             title = "Enable Auto Harvest",
@@ -840,11 +840,12 @@ private fun AutoHarvestCard(settings: AppSettings, onUpdate: (AppSettings) -> Un
             Text("Mutation condition", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
             Spacer(modifier = Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(
-                    AutoHarvestConfig.MutationCondition.NONE to "No mutation needed",
+                val conditions = listOf(
+                    AutoHarvestConfig.MutationCondition.NONE to "No mutation",
                     AutoHarvestConfig.MutationCondition.ANY to "Any mutation",
-                    AutoHarvestConfig.MutationCondition.SPECIFIC to "Specific mutation",
-                ).forEach { (condition, label) ->
+                    AutoHarvestConfig.MutationCondition.SPECIFIC to "Specific",
+                )
+                conditions.forEach { (condition, label) ->
                     val selected = config.mutationCondition == condition
                     Box(
                         modifier = Modifier
@@ -899,6 +900,7 @@ private fun AutoHarvestCard(settings: AppSettings, onUpdate: (AppSettings) -> Un
     }
 }
 
+@Composable
 private fun DeveloperCard(settings: AppSettings, onUpdate: (AppSettings) -> Unit) {
     AppCard(title = "Developer Options", collapsible = true, persistKey = "settings_dev") {
         ToggleRow(
