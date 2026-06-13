@@ -869,7 +869,7 @@ private fun AutoHarvestCard(settings: AppSettings, onUpdate: (AppSettings) -> Un
                     value = config.requiredMutation,
                     onValueChange = { onUpdate(settings.copy(autoHarvest = config.copy(requiredMutation = it))) },
                     label = { Text("Required mutation") },
-                    placeholder = { Text("e.g. Rainbow, Gold", color = TextSecondary) },
+                    placeholder = { Text("e.g. Rainbow, Frozen (must have ALL)", color = TextSecondary) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(

@@ -1470,23 +1470,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!config.enabled) return
         val actions = clients[sessionId]?.actions ?: return
 
-        val toHarvest = garden.filter { plant ->
-            // Cây phải đạt 100%
-            if (plant.targetScale < 1.0) return@filter false
+        // Parse required mutations (comma-separated)
+        val requiredMutations = config.requiredMutation
+            .split(",")
+            .map { it.trim().lowercase() }
+            .filter { it.isNotBlank() }
 
-            // Filter theo loài nếu có
+        val toHarvest = garden.filter { plant ->
+            // Check species filter
             if (config.speciesFilter.isNotBlank() &&
                 !plant.species.lowercase().contains(config.speciesFilter.lowercase())) return@filter false
 
-            // Điều kiện đột biến
+            // Check 100% size using maxScale from API
+            val maxScale = MgApi.findItem(plant.species)?.maxScale ?: 1.0
+            val effectiveMax = if (maxScale <= 1.0) 1.0 else maxScale
+            val sizePercent = if (effectiveMax <= 1.0) {
+                if (plant.targetScale >= 1.0) 100.0 else plant.targetScale * 100.0
+            } else {
+                if (plant.targetScale <= 1.0) plant.targetScale * 50.0
+                else 50.0 + (plant.targetScale - 1.0) / (effectiveMax - 1.0) * 50.0
+            }
+            if (sizePercent < 100.0) return@filter false
+
+            // Check mutation condition
             when (config.mutationCondition) {
                 com.mgafk.app.data.model.AutoHarvestConfig.MutationCondition.NONE -> true
                 com.mgafk.app.data.model.AutoHarvestConfig.MutationCondition.ANY ->
                     plant.mutations.isNotEmpty()
-                com.mgafk.app.data.model.AutoHarvestConfig.MutationCondition.SPECIFIC ->
-                    plant.mutations.any { m ->
-                        m.lowercase().contains(config.requiredMutation.lowercase())
+                com.mgafk.app.data.model.AutoHarvestConfig.MutationCondition.SPECIFIC -> {
+                    if (requiredMutations.isEmpty()) true
+                    else requiredMutations.all { required ->
+                        plant.mutations.any { m -> m.lowercase().contains(required) }
                     }
+                }
             }
         }
 
